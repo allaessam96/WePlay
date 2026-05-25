@@ -1,0 +1,8 @@
+{
+  "name": "بوابة المغامرة | لوحة التحكم والتحقق",
+  "description": "بوابة تفاعلية ذكية لتسجيل روابط المغامرات والأكلات المفضلة والصور، مجهزة بنظام حسابات متطور ومقالب ذكية للمستخدمين والمدراء.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

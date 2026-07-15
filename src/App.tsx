@@ -93,6 +93,33 @@ const careersList: CareerItem[] = [
   { id: 'auto-security', category: 'both', level: 'senior', title: 'Automated Security Systems Engineer', titleAr: '🛡️ مهندس أنظمة الحماية الذكية الذاتية', desc: 'تصميم وبناء دروع نارية ودفاعات تتعلم ذاتياً من الهجمات وتعدم الفايرسات بالذكاء التلقائي دون انتظار للبشر.' }
 ];
 
+// Persist a value to localStorage, surfacing quota/serialization failures
+// instead of letting them fail silently. Returns true on success.
+function writeStorage(key: string, value: unknown): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (err) {
+    console.error(`Failed to save "${key}" to localStorage:`, err);
+    return false;
+  }
+}
+
+// Read and parse a value from localStorage. Corrupt data is logged (not
+// silently swallowed) and the provided fallback is returned instead.
+function readStorage<T>(key: string, fallback: T): T {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.error(`Failed to parse "${key}" from localStorage; ignoring corrupt value:`, err);
+    return fallback;
+  }
+}
+
+const STORAGE_ERROR_MSG = 'تعذّر حفظ البيانات محلياً (قد تكون مساحة التخزين ممتلئة). قد لا تُحفظ تغييراتك.';
+
 export default function App() {
   // Accounts System states
   const [users, setUsers] = useState<UserAccount[]>([]);
@@ -165,15 +192,7 @@ export default function App() {
   // Load from LocalStorage
   useEffect(() => {
     // 1. Users list
-    const savedUsers = localStorage.getItem('adv_users_v1');
-    let loadedUsers: UserAccount[] = [];
-    if (savedUsers) {
-      try {
-        loadedUsers = JSON.parse(savedUsers);
-      } catch (e) {
-        console.error('Failed to parse users');
-      }
-    }
+    let loadedUsers: UserAccount[] = readStorage<UserAccount[]>('adv_users_v1', []);
 
     // Ensure prefilled/preset Admin account exists according to specifications
     const adminEmail = 'esamsaif2016@gmail.com';
@@ -193,7 +212,7 @@ export default function App() {
         isInfinite: true
       };
       loadedUsers.push(defaultAdmin);
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
+      writeStorage('adv_users_v1', loadedUsers);
     } else {
       // Keep credentials matches completely
       loadedUsers = loadedUsers.map(u => {
@@ -211,45 +230,32 @@ export default function App() {
         }
         return u;
       });
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
+      writeStorage('adv_users_v1', loadedUsers);
     }
     setUsers(loadedUsers);
 
     // 2. Logged in user
-    const savedSession = localStorage.getItem('adv_current_user_v1');
-    if (savedSession && loadedUsers.length > 0) {
-      try {
-        const parsedSession = JSON.parse(savedSession) as UserAccount;
-        // Verify user still exists in DB
-        const realUser = loadedUsers.find(u => u.id === parsedSession.id);
-        if (realUser) {
-          setCurrentUser(realUser);
-        } else {
-          localStorage.removeItem('adv_current_user_v1');
-        }
-      } catch (e) {
-        console.error('Failed to parse session');
+    const parsedSession = readStorage<UserAccount | null>('adv_current_user_v1', null);
+    if (parsedSession && loadedUsers.length > 0) {
+      // Verify user still exists in DB
+      const realUser = loadedUsers.find(u => u.id === parsedSession.id);
+      if (realUser) {
+        setCurrentUser(realUser);
+      } else {
+        localStorage.removeItem('adv_current_user_v1');
       }
     }
 
     // 3. Support Tickets list
-    const savedTickets = localStorage.getItem('adv_support_messages_v1');
-    if (savedTickets) {
-      try {
-        setSupportTickets(JSON.parse(savedTickets));
-      } catch (_) {}
-    }
+    setSupportTickets(readStorage<SupportMessage[]>('adv_support_messages_v1', []));
 
     // 3b. Links list
-    const savedLinks = localStorage.getItem('adv_links_v1');
-    if (savedLinks) {
-      try { setLinks(JSON.parse(savedLinks)); } catch (_) {}
-    }
+    setLinks(readStorage<AdventureLink[]>('adv_links_v1', []));
 
     // 4. Dishes list
     const savedDishes = localStorage.getItem('adv_dishes_v1');
     if (savedDishes) {
-      try { setDishes(JSON.parse(savedDishes)); } catch (_) {}
+      setDishes(readStorage<FavoriteDish[]>('adv_dishes_v1', []));
     } else {
       // Clean default food presets
       const defaultDishes: FavoriteDish[] = [
@@ -262,7 +268,7 @@ export default function App() {
     // 5. Photos list
     const savedPhotos = localStorage.getItem('adv_photos_v1');
     if (savedPhotos) {
-      try { setPhotos(JSON.parse(savedPhotos)); } catch (_) {}
+      setPhotos(readStorage<FavoritePhoto[]>('adv_photos_v1', []));
     } else {
       const defaultPhotos: FavoritePhoto[] = [
         { id: 'photo-1', title: 'بوابة المغامرة الأولى 🚪', url: 'PRESET_ICON:🌌', createdAt: '١٢:٤٠ م', userId: 'all' }
@@ -274,22 +280,22 @@ export default function App() {
   // Save actions to local storage helper
   const saveUsersToStorage = (updatedUsers: UserAccount[]) => {
     setUsers(updatedUsers);
-    localStorage.setItem('adv_users_v1', JSON.stringify(updatedUsers));
+    if (!writeStorage('adv_users_v1', updatedUsers)) setErrorMsg(STORAGE_ERROR_MSG);
   };
 
   const saveLinksToStorage = (updatedLinks: AdventureLink[]) => {
     setLinks(updatedLinks);
-    localStorage.setItem('adv_links_v1', JSON.stringify(updatedLinks));
+    if (!writeStorage('adv_links_v1', updatedLinks)) setErrorMsg(STORAGE_ERROR_MSG);
   };
 
   const saveDishesToStorage = (updatedDishes: FavoriteDish[]) => {
     setDishes(updatedDishes);
-    localStorage.setItem('adv_dishes_v1', JSON.stringify(updatedDishes));
+    if (!writeStorage('adv_dishes_v1', updatedDishes)) setErrorMsg(STORAGE_ERROR_MSG);
   };
 
   const savePhotosToStorage = (updatedPhotos: FavoritePhoto[]) => {
     setPhotos(updatedPhotos);
-    localStorage.setItem('adv_photos_v1', JSON.stringify(updatedPhotos));
+    if (!writeStorage('adv_photos_v1', updatedPhotos)) setErrorMsg(STORAGE_ERROR_MSG);
   };
 
   // Check user existence in users list (handles deleted account in single or multiple windows)
@@ -372,7 +378,9 @@ export default function App() {
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + duration);
-    } catch {}
+    } catch (err) {
+      console.warn('Audio playback unavailable:', err);
+    }
   };
 
   const playAlarmSiren = () => {
@@ -400,7 +408,9 @@ export default function App() {
         osc.stop(time + 0.5);
         time += 0.5;
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Audio playback unavailable:', err);
+    }
   };
 
   const playAddSound = () => playSynthSound(440, 'triangle', 0.15); // Add
@@ -453,7 +463,7 @@ export default function App() {
     if (newUser.role === 'admin') {
       // Direct success login for Admin
       setCurrentUser(newUser);
-      localStorage.setItem('adv_current_user_v1', JSON.stringify(newUser));
+      if (!writeStorage('adv_current_user_v1', newUser)) setErrorMsg(STORAGE_ERROR_MSG);
       setSuccessMsg(`أهلاً بك! لقد تم تسجيلك "كمدير عام" للنظام وتفعيل حسابك مجاناً مدى الحياة 👑`);
       playCompleteSound();
     } else {
@@ -514,7 +524,7 @@ export default function App() {
 
     // Allow Login
     setCurrentUser(found);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(found));
+    if (!writeStorage('adv_current_user_v1', found)) setErrorMsg(STORAGE_ERROR_MSG);
     setSuccessMsg(`مرحباً مجدداً، ${found.username}! تم تسجيل دخولك بأمان.`);
     playCompleteSound();
   };
@@ -623,6 +633,10 @@ export default function App() {
         setUploadedReceiptBase64(reader.result as string);
         playCompleteSound();
       };
+      reader.onerror = () => {
+        console.error('Failed to read receipt file:', reader.error);
+        setPayError('تعذّر قراءة ملف الصورة. الرجاء المحاولة بصورة أخرى.');
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -659,7 +673,7 @@ export default function App() {
 
     const nextTickets = [newTicket, ...supportTickets];
     setSupportTickets(nextTickets);
-    localStorage.setItem('adv_support_messages_v1', JSON.stringify(nextTickets));
+    if (!writeStorage('adv_support_messages_v1', nextTickets)) setErrorMsg(STORAGE_ERROR_MSG);
 
     setSupportSubject('');
     setSupportBody('');
@@ -686,7 +700,7 @@ export default function App() {
     });
 
     setSupportTickets(nextTickets);
-    localStorage.setItem('adv_support_messages_v1', JSON.stringify(nextTickets));
+    if (!writeStorage('adv_support_messages_v1', nextTickets)) setErrorMsg(STORAGE_ERROR_MSG);
 
     setSupportReplyText(prev => ({
       ...prev,
@@ -764,7 +778,7 @@ export default function App() {
 
     const activeUserObj = updatedUsers.find(u => u.id === paymentPendingUser.id)!;
     setCurrentUser(activeUserObj);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(activeUserObj));
+    if (!writeStorage('adv_current_user_v1', activeUserObj)) setErrorMsg(STORAGE_ERROR_MSG);
 
     setPaymentPendingUser(null);
     setSuccessMsg('تم تأكيد تخطي الدفع بنجاح! تم تنشيط الحساب العادي (صلاحية مجازية لمدة دقيقة واحدة!) ⏳🚪');
@@ -885,6 +899,10 @@ export default function App() {
           setInputDishImage(base64);
         }
         playCompleteSound();
+      };
+      reader.onerror = () => {
+        console.error('Failed to read image file:', reader.error);
+        setErrorMsg('تعذّر قراءة ملف الصورة. الرجاء المحاولة بصورة أخرى.');
       };
       reader.readAsDataURL(file);
     }

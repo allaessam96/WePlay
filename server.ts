@@ -210,11 +210,13 @@ app.post("/api/generate-blueprint", async (req, res) => {
     const result = JSON.parse(text.trim());
     return res.json(result);
 
-  } catch (error: any) {
+  } catch (error) {
     console.error("Gemini Generation Error:", error);
+    const isDev = process.env.NODE_ENV !== "production";
     return res.status(500).json({
       error: "حدث خطأ أثناء الاتصال بالذكاء الاصطناعي لتصميم التطبيق. الرجاء المحاولة مرة أخرى.",
-      details: error.message
+      // Only expose internal error details outside production to avoid leaking internals.
+      ...(isDev && { details: error instanceof Error ? error.message : String(error) })
     });
   }
 });
@@ -232,15 +234,28 @@ async function startServer() {
     // Production settings
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.get("*", (req, res, next) => {
+      res.sendFile(path.join(distPath, "index.html"), (err) => {
+        if (err) next(err);
+      });
     });
     console.log("Serving static production build from dist.");
   }
+
+  // Centralized error handler so uncaught request errors are logged and
+  // reported to the client instead of hanging or leaking a stack trace.
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("Unhandled request error:", err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: "حدث خطأ غير متوقع في الخادم." });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Smart App Blueprint server running on port ${PORT}`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Fatal: failed to start server:", err);
+  process.exit(1);
+});

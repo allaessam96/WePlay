@@ -2,20 +2,9 @@ export interface UserAccount {
   id: string;
   username: string;
   email: string;
-  role: 'admin' | 'regular';
+  role: 'regular';
   createdAt: string;
-  hasPaid: boolean;
-  paymentTime: string | null; // ISO string of payment
-  expired: boolean; // True after exactly 1 minute
-  password?: string; // Save password to verify pre-seeded admin or logins
-  isInfinite?: boolean; // Set by Manager to bypass the 1-minute prank timer and stay infinite!
-  
-  // Custom verification and payment characteristics
-  emailVerified?: boolean;
-  emailVerificationCode?: string;
-  bankTransferReceipt?: string; // base64 receipt/card photo
-  bankTransferOTP?: string; // OTP verified
-  paymentPendingVerification?: boolean; // waiting for admin approval
+  passwordHash: string;
 }
 
 export interface SupportMessage {

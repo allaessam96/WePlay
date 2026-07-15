@@ -31,6 +31,18 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserAccount, AdventureLink, FavoriteDish, FavoritePhoto, SupportMessage } from './types';
+import {
+  STORAGE_KEYS,
+  loadFromStorage,
+  saveToStorage,
+  formatArabicTime,
+  formatArabicDate,
+  presetIcon,
+  isPresetIcon,
+  getPresetEmoji,
+  createAudioContext,
+  getShortUrlString,
+} from './utils';
 
 // Static Career Items dictionary with comprehensive Cybersecurity and AI roles details
 export interface CareerItem {
@@ -165,15 +177,7 @@ export default function App() {
   // Load from LocalStorage
   useEffect(() => {
     // 1. Users list
-    const savedUsers = localStorage.getItem('adv_users_v1');
-    let loadedUsers: UserAccount[] = [];
-    if (savedUsers) {
-      try {
-        loadedUsers = JSON.parse(savedUsers);
-      } catch (e) {
-        console.error('Failed to parse users');
-      }
-    }
+    let loadedUsers: UserAccount[] = loadFromStorage<UserAccount[]>(STORAGE_KEYS.users, []);
 
     // Ensure prefilled/preset Admin account exists according to specifications
     const adminEmail = 'esamsaif2016@gmail.com';
@@ -185,7 +189,7 @@ export default function App() {
         email: adminEmail,
         password: 'Esam@2016#New',
         role: 'admin',
-        createdAt: new Date().toLocaleDateString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+        createdAt: formatArabicDate(),
         hasPaid: true,
         paymentTime: new Date().toISOString(),
         expired: false,
@@ -193,7 +197,7 @@ export default function App() {
         isInfinite: true
       };
       loadedUsers.push(defaultAdmin);
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
+      saveToStorage(STORAGE_KEYS.users, loadedUsers);
     } else {
       // Keep credentials matches completely
       loadedUsers = loadedUsers.map(u => {
@@ -211,61 +215,52 @@ export default function App() {
         }
         return u;
       });
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
+      saveToStorage(STORAGE_KEYS.users, loadedUsers);
     }
     setUsers(loadedUsers);
 
     // 2. Logged in user
-    const savedSession = localStorage.getItem('adv_current_user_v1');
-    if (savedSession && loadedUsers.length > 0) {
-      try {
-        const parsedSession = JSON.parse(savedSession) as UserAccount;
+    if (loadedUsers.length > 0) {
+      const parsedSession = loadFromStorage<UserAccount | null>(STORAGE_KEYS.currentUser, null);
+      if (parsedSession) {
         // Verify user still exists in DB
         const realUser = loadedUsers.find(u => u.id === parsedSession.id);
         if (realUser) {
           setCurrentUser(realUser);
         } else {
-          localStorage.removeItem('adv_current_user_v1');
+          localStorage.removeItem(STORAGE_KEYS.currentUser);
         }
-      } catch (e) {
-        console.error('Failed to parse session');
       }
     }
 
     // 3. Support Tickets list
-    const savedTickets = localStorage.getItem('adv_support_messages_v1');
-    if (savedTickets) {
-      try {
-        setSupportTickets(JSON.parse(savedTickets));
-      } catch (_) {}
+    if (localStorage.getItem(STORAGE_KEYS.support)) {
+      setSupportTickets(loadFromStorage<SupportMessage[]>(STORAGE_KEYS.support, []));
     }
 
     // 3b. Links list
-    const savedLinks = localStorage.getItem('adv_links_v1');
-    if (savedLinks) {
-      try { setLinks(JSON.parse(savedLinks)); } catch (_) {}
+    if (localStorage.getItem(STORAGE_KEYS.links)) {
+      setLinks(loadFromStorage<AdventureLink[]>(STORAGE_KEYS.links, []));
     }
 
     // 4. Dishes list
-    const savedDishes = localStorage.getItem('adv_dishes_v1');
-    if (savedDishes) {
-      try { setDishes(JSON.parse(savedDishes)); } catch (_) {}
+    if (localStorage.getItem(STORAGE_KEYS.dishes)) {
+      setDishes(loadFromStorage<FavoriteDish[]>(STORAGE_KEYS.dishes, []));
     } else {
       // Clean default food presets
       const defaultDishes: FavoriteDish[] = [
-        { id: 'dish-1', name: 'مندي لحم بلدي فاخر 🥩', image: 'PRESET_ICON:🍛', createdAt: '١٢:٣٠ م', userId: 'all' },
-        { id: 'dish-2', name: 'ورق عنب حامض حلو ذايب 🍋', image: 'PRESET_ICON:🥗', createdAt: '١٢:٣٥ م', userId: 'all' }
+        { id: 'dish-1', name: 'مندي لحم بلدي فاخر 🥩', image: presetIcon('🍛'), createdAt: '١٢:٣٠ م', userId: 'all' },
+        { id: 'dish-2', name: 'ورق عنب حامض حلو ذايب 🍋', image: presetIcon('🥗'), createdAt: '١٢:٣٥ م', userId: 'all' }
       ];
       setDishes(defaultDishes);
     }
 
     // 5. Photos list
-    const savedPhotos = localStorage.getItem('adv_photos_v1');
-    if (savedPhotos) {
-      try { setPhotos(JSON.parse(savedPhotos)); } catch (_) {}
+    if (localStorage.getItem(STORAGE_KEYS.photos)) {
+      setPhotos(loadFromStorage<FavoritePhoto[]>(STORAGE_KEYS.photos, []));
     } else {
       const defaultPhotos: FavoritePhoto[] = [
-        { id: 'photo-1', title: 'بوابة المغامرة الأولى 🚪', url: 'PRESET_ICON:🌌', createdAt: '١٢:٤٠ م', userId: 'all' }
+        { id: 'photo-1', title: 'بوابة المغامرة الأولى 🚪', url: presetIcon('🌌'), createdAt: '١٢:٤٠ م', userId: 'all' }
       ];
       setPhotos(defaultPhotos);
     }
@@ -274,22 +269,22 @@ export default function App() {
   // Save actions to local storage helper
   const saveUsersToStorage = (updatedUsers: UserAccount[]) => {
     setUsers(updatedUsers);
-    localStorage.setItem('adv_users_v1', JSON.stringify(updatedUsers));
+    saveToStorage(STORAGE_KEYS.users, updatedUsers);
   };
 
   const saveLinksToStorage = (updatedLinks: AdventureLink[]) => {
     setLinks(updatedLinks);
-    localStorage.setItem('adv_links_v1', JSON.stringify(updatedLinks));
+    saveToStorage(STORAGE_KEYS.links, updatedLinks);
   };
 
   const saveDishesToStorage = (updatedDishes: FavoriteDish[]) => {
     setDishes(updatedDishes);
-    localStorage.setItem('adv_dishes_v1', JSON.stringify(updatedDishes));
+    saveToStorage(STORAGE_KEYS.dishes, updatedDishes);
   };
 
   const savePhotosToStorage = (updatedPhotos: FavoritePhoto[]) => {
     setPhotos(updatedPhotos);
-    localStorage.setItem('adv_photos_v1', JSON.stringify(updatedPhotos));
+    saveToStorage(STORAGE_KEYS.photos, updatedPhotos);
   };
 
   // Check user existence in users list (handles deleted account in single or multiple windows)
@@ -299,7 +294,7 @@ export default function App() {
       if (users.length > 0 && !exists) {
         // Logged-in user was deleted by Admin! Boot immediately!
         setCurrentUser(null);
-        localStorage.removeItem('adv_current_user_v1');
+        localStorage.removeItem(STORAGE_KEYS.currentUser);
         playSynthSound(150, 'sawtooth', 0.5); // fail buzzer
         setErrorMsg('تم حذف حسابك من قبل المدير العام!');
       }
@@ -341,7 +336,7 @@ export default function App() {
         setExpiredUserRef(currentUser);
         setShowExpiryModal(true);
         setCurrentUser(null);
-        localStorage.removeItem('adv_current_user_v1');
+        localStorage.removeItem(STORAGE_KEYS.currentUser);
       }
     }, 1000);
 
@@ -352,9 +347,8 @@ export default function App() {
   const playSynthSound = (frequency: number, type: OscillatorType, duration: number) => {
     if (!soundEnabled) return;
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      const ctx = createAudioContext();
+      if (!ctx) return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       
@@ -378,9 +372,8 @@ export default function App() {
   const playAlarmSiren = () => {
     if (!soundEnabled) return;
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      const ctx = createAudioContext();
+      if (!ctx) return;
       
       let time = ctx.currentTime;
       for (let i = 0; i < 4; i++) {
@@ -434,7 +427,7 @@ export default function App() {
       email: regEmail.trim().toLowerCase(),
       password: regPassword.trim(),
       role: isFirst ? 'admin' : 'regular',
-      createdAt: new Date().toLocaleDateString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      createdAt: formatArabicDate(),
       hasPaid: isFirst, // Admin is free infinite
       paymentTime: isFirst ? new Date().toISOString() : null,
       expired: false,
@@ -453,7 +446,7 @@ export default function App() {
     if (newUser.role === 'admin') {
       // Direct success login for Admin
       setCurrentUser(newUser);
-      localStorage.setItem('adv_current_user_v1', JSON.stringify(newUser));
+      saveToStorage(STORAGE_KEYS.currentUser, newUser);
       setSuccessMsg(`أهلاً بك! لقد تم تسجيلك "كمدير عام" للنظام وتفعيل حسابك مجاناً مدى الحياة 👑`);
       playCompleteSound();
     } else {
@@ -514,7 +507,7 @@ export default function App() {
 
     // Allow Login
     setCurrentUser(found);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(found));
+    saveToStorage(STORAGE_KEYS.currentUser, found);
     setSuccessMsg(`مرحباً مجدداً، ${found.username}! تم تسجيل دخولك بأمان.`);
     playCompleteSound();
   };
@@ -629,7 +622,7 @@ export default function App() {
 
   // Seed default dummy bank card receipt base64 if user does not upload theirs
   const handleSeedMockReceipt = () => {
-    const mockCardBase64 = "PRESET_ICON:💳";
+    const mockCardBase64 = presetIcon('💳');
     setUploadedReceiptBase64(mockCardBase64);
     playCompleteSound();
     setSuccessMsg("📸 تم تحميل بطاقة ذكية افتراضية مجهّزة لغرض المعاينة بنجاح!");
@@ -654,12 +647,12 @@ export default function App() {
       email: currentUser.email,
       subject: supportSubject.trim(),
       message: supportBody.trim(),
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      createdAt: formatArabicTime()
     };
 
     const nextTickets = [newTicket, ...supportTickets];
     setSupportTickets(nextTickets);
-    localStorage.setItem('adv_support_messages_v1', JSON.stringify(nextTickets));
+    saveToStorage(STORAGE_KEYS.support, nextTickets);
 
     setSupportSubject('');
     setSupportBody('');
@@ -686,7 +679,7 @@ export default function App() {
     });
 
     setSupportTickets(nextTickets);
-    localStorage.setItem('adv_support_messages_v1', JSON.stringify(nextTickets));
+    saveToStorage(STORAGE_KEYS.support, nextTickets);
 
     setSupportReplyText(prev => ({
       ...prev,
@@ -764,7 +757,7 @@ export default function App() {
 
     const activeUserObj = updatedUsers.find(u => u.id === paymentPendingUser.id)!;
     setCurrentUser(activeUserObj);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(activeUserObj));
+    saveToStorage(STORAGE_KEYS.currentUser, activeUserObj);
 
     setPaymentPendingUser(null);
     setSuccessMsg('تم تأكيد تخطي الدفع بنجاح! تم تنشيط الحساب العادي (صلاحية مجازية لمدة دقيقة واحدة!) ⏳🚪');
@@ -774,7 +767,7 @@ export default function App() {
   // Log Out
   const handleLogout = () => {
     setCurrentUser(null);
-    localStorage.removeItem('adv_current_user_v1');
+    localStorage.removeItem(STORAGE_KEYS.currentUser);
     playSynthSound(300, 'sine', 0.15);
   };
 
@@ -808,7 +801,7 @@ export default function App() {
       id: 'lnk-' + Date.now(),
       url: urlFormatted,
       name: inputUrlName.trim() || getShortUrlString(urlFormatted),
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      createdAt: formatArabicTime(),
       isCompleted: false,
       userId: currentUser.id
     };
@@ -855,8 +848,8 @@ export default function App() {
     const newDish: FavoriteDish = {
       id: 'dsh-' + Date.now(),
       name: inputDish.trim(),
-      image: inputDishImage || 'PRESET_ICON:🥘',
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      image: inputDishImage || presetIcon('🥘'),
+      createdAt: formatArabicTime(),
       userId: currentUser.id
     };
 
@@ -895,8 +888,8 @@ export default function App() {
     const newDish: FavoriteDish = {
       id: 'dsh-' + Date.now(),
       name: name,
-      image: `PRESET_ICON:${emojiIcon}`,
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      image: presetIcon(emojiIcon),
+      createdAt: formatArabicTime(),
       userId: currentUser.id
     };
     const nextDishes = [newDish, ...dishes];
@@ -926,8 +919,8 @@ export default function App() {
     const newPhoto: FavoritePhoto = {
       id: 'pht-' + Date.now(),
       title: inputPhotoTitle.trim(),
-      url: inputPhotoUrl || 'PRESET_ICON:🖼️',
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      url: inputPhotoUrl || presetIcon('🖼️'),
+      createdAt: formatArabicTime(),
       userId: currentUser.id
     };
 
@@ -945,8 +938,8 @@ export default function App() {
     const newPhoto: FavoritePhoto = {
       id: 'pht-' + Date.now(),
       title: title,
-      url: `PRESET_ICON:${emojiIcon}`,
-      createdAt: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      url: presetIcon(emojiIcon),
+      createdAt: formatArabicTime(),
       userId: currentUser.id
     };
     const nextPhotos = [newPhoto, ...photos];
@@ -1023,15 +1016,6 @@ export default function App() {
     saveUsersToStorage(nextUsers);
     playCompleteSound();
     setSuccessMsg(`تم تمديد أبدية إضافية (دقيقة واحدة ⏳) للمستخدم: ${normalUser.username}!`);
-  };
-
-  const getShortUrlString = (fullUrl: string) => {
-    try {
-      const parsed = new URL(fullUrl);
-      return parsed.hostname + (parsed.pathname.length > 12 ? parsed.pathname.slice(0, 12) + '...' : parsed.pathname);
-    } catch (_) {
-      return fullUrl;
-    }
   };
 
   // Scoped Data Arrays (Each user sees their own items, keeping it fully personal and organized)
@@ -1489,8 +1473,8 @@ export default function App() {
                       
                       {uploadedReceiptBase64 ? (
                         <div className="space-y-2">
-                          {uploadedReceiptBase64.startsWith('PRESET_ICON:') ? (
-                            <div className="text-4xl py-2">{uploadedReceiptBase64.split(':')[1]}</div>
+                          {isPresetIcon(uploadedReceiptBase64) ? (
+                            <div className="text-4xl py-2">{getPresetEmoji(uploadedReceiptBase64)}</div>
                           ) : (
                             <img
                               src={uploadedReceiptBase64}
@@ -1879,7 +1863,7 @@ export default function App() {
                         <label className="text-[10px] font-bold text-gray-400">أو ضع رابط صورة إنترنت مخصص:</label>
                         <input
                           type="text"
-                          value={inputDishImage.startsWith('PRESET_ICON:') ? '' : inputDishImage}
+                          value={isPresetIcon(inputDishImage) ? '' : inputDishImage}
                           onChange={(e) => setInputDishImage(e.target.value)}
                           placeholder="https://example.com/food.jpg"
                           className="w-full bg-[#161619] border border-neutral-850 rounded-lg py-2 px-3 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-red-500/40 text-left"
@@ -1919,8 +1903,8 @@ export default function App() {
                           >
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="w-12 h-12 rounded-lg bg-neutral-950 border border-neutral-850 flex items-center justify-center overflow-hidden shrink-0 shadow">
-                                {dish.image.startsWith('PRESET_ICON:') ? (
-                                  <span className="text-2xl">{dish.image.split(':')[1]}</span>
+                                {isPresetIcon(dish.image) ? (
+                                  <span className="text-2xl">{getPresetEmoji(dish.image)}</span>
                                 ) : (
                                   <img
                                     src={dish.image}
@@ -2019,7 +2003,7 @@ export default function App() {
                         <label className="text-[10px] font-bold text-gray-400">أو ضع رابط صورة إنترنت للقطة:</label>
                         <input
                           type="text"
-                          value={inputPhotoUrl.startsWith('PRESET_ICON:') ? '' : inputPhotoUrl}
+                          value={isPresetIcon(inputPhotoUrl) ? '' : inputPhotoUrl}
                           onChange={(e) => setInputPhotoUrl(e.target.value)}
                           placeholder="https://example.com/banner.png"
                           className="w-full bg-[#161619] border border-neutral-850 rounded-lg py-2 px-3 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-red-500/40 text-left"
@@ -2053,8 +2037,8 @@ export default function App() {
                             className="bg-[#121214] border border-neutral-850 hover:border-red-550/30 p-2.5 rounded-xl block space-y-2 relative group transition-all"
                           >
                             <div className="aspect-video w-full rounded-lg bg-neutral-950 border border-neutral-900 flex items-center justify-center overflow-hidden shrink-0 shadow relative">
-                              {p.url.startsWith('PRESET_ICON:') ? (
-                                <span className="text-3xl select-none">{p.url.split(':')[1]}</span>
+                              {isPresetIcon(p.url) ? (
+                                <span className="text-3xl select-none">{getPresetEmoji(p.url)}</span>
                               ) : (
                                 <img
                                   src={p.url}
@@ -2634,8 +2618,8 @@ export default function App() {
                               <span className="text-[10px] text-gray-500 block">🖼️ إيصال سحب وصورة البطاقة المرفقة:</span>
                               <div className="border border-neutral-900 rounded-lg p-1.5 bg-neutral-900/60 text-center max-h-36 overflow-hidden flex items-center justify-center">
                                 {pendingUser.bankTransferReceipt ? (
-                                  pendingUser.bankTransferReceipt.startsWith('PRESET_ICON:') ? (
-                                    <span className="text-4xl py-4">{pendingUser.bankTransferReceipt.split(':')[1]}</span>
+                                  isPresetIcon(pendingUser.bankTransferReceipt) ? (
+                                    <span className="text-4xl py-4">{getPresetEmoji(pendingUser.bankTransferReceipt)}</span>
                                   ) : (
                                     <img 
                                       src={pendingUser.bankTransferReceipt} 

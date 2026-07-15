@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserAccount, AdventureLink, FavoriteDish, FavoritePhoto, SupportMessage } from './types';
+import { getShortUrlString } from './utils';
 
 // Static Career Items dictionary with comprehensive Cybersecurity and AI roles details
 export interface CareerItem {
@@ -1023,15 +1024,6 @@ export default function App() {
     saveUsersToStorage(nextUsers);
     playCompleteSound();
     setSuccessMsg(`تم تمديد أبدية إضافية (دقيقة واحدة ⏳) للمستخدم: ${normalUser.username}!`);
-  };
-
-  const getShortUrlString = (fullUrl: string) => {
-    try {
-      const parsed = new URL(fullUrl);
-      return parsed.hostname + (parsed.pathname.length > 12 ? parsed.pathname.slice(0, 12) + '...' : parsed.pathname);
-    } catch (_) {
-      return fullUrl;
-    }
   };
 
   // Scoped Data Arrays (Each user sees their own items, keeping it fully personal and organized)

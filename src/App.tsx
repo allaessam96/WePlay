@@ -7,30 +7,18 @@ import {
   Check, 
   Volume2, 
   VolumeX, 
-  Share2, 
   HelpCircle, 
   Info,
-  Flame,
   CheckCircle,
-  Clock,
   ExternalLink,
-  Shield,
-  Coins,
-  Lock,
-  Unlock,
-  User,
-  UserCheck,
-  Users,
   LogOut,
   Image as ImageIcon,
   Utensils,
-  CreditCard,
-  AlertTriangle,
-  RotateCcw,
-  UserX
+  AlertTriangle
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { UserAccount, AdventureLink, FavoriteDish, FavoritePhoto, SupportMessage } from './types';
+import { createPasswordHash, isSafeHttpUrl, isSafeImageSource, normalizeHttpUrl, verifyPassword } from './security';
 
 // Static Career Items dictionary with comprehensive Cybersecurity and AI roles details
 export interface CareerItem {
@@ -42,6 +30,113 @@ export interface CareerItem {
   desc: string;
   isHighSalary?: boolean;
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+interface AudioEnabledWindow extends Window {
+  webkitAudioContext?: typeof AudioContext;
+}
+
+const migrateStoredUsers = async (value: unknown): Promise<UserAccount[]> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const migratedUsers = await Promise.all(value.map(async (entry) => {
+    if (
+      !isRecord(entry) ||
+      entry.role === 'admin' ||
+      typeof entry.id !== 'string' ||
+      typeof entry.username !== 'string' ||
+      typeof entry.email !== 'string' ||
+      typeof entry.createdAt !== 'string'
+    ) {
+      return null;
+    }
+
+    const passwordHash = typeof entry.passwordHash === 'string'
+      ? entry.passwordHash
+      : typeof entry.password === 'string' && entry.password.length >= 10
+        ? await createPasswordHash(entry.password)
+        : null;
+
+    if (!passwordHash) {
+      return null;
+    }
+
+    return {
+      id: entry.id,
+      username: entry.username.slice(0, 50),
+      email: entry.email.toLowerCase().slice(0, 254),
+      role: 'regular' as const,
+      createdAt: entry.createdAt,
+      passwordHash,
+    };
+  }));
+
+  return migratedUsers.filter((user): user is UserAccount => user !== null);
+};
+
+const readStoredLinks = (value: unknown): AdventureLink[] =>
+  Array.isArray(value)
+    ? value.slice(0, 500).filter((entry): entry is AdventureLink =>
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        typeof entry.url === 'string' &&
+        isSafeHttpUrl(entry.url) &&
+        typeof entry.name === 'string' &&
+        entry.name.length <= 100 &&
+        typeof entry.createdAt === 'string' &&
+        typeof entry.isCompleted === 'boolean' &&
+        typeof entry.userId === 'string'
+      )
+    : [];
+
+const readStoredDishes = (value: unknown): FavoriteDish[] =>
+  Array.isArray(value)
+    ? value.slice(0, 500).filter((entry): entry is FavoriteDish =>
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        typeof entry.name === 'string' &&
+        entry.name.length <= 100 &&
+        typeof entry.image === 'string' &&
+        isSafeImageSource(entry.image) &&
+        typeof entry.createdAt === 'string' &&
+        typeof entry.userId === 'string'
+      )
+    : [];
+
+const readStoredPhotos = (value: unknown): FavoritePhoto[] =>
+  Array.isArray(value)
+    ? value.slice(0, 500).filter((entry): entry is FavoritePhoto =>
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        typeof entry.title === 'string' &&
+        entry.title.length <= 100 &&
+        typeof entry.url === 'string' &&
+        isSafeImageSource(entry.url) &&
+        typeof entry.createdAt === 'string' &&
+        typeof entry.userId === 'string'
+      )
+    : [];
+
+const readStoredSupportMessages = (value: unknown): SupportMessage[] =>
+  Array.isArray(value)
+    ? value.slice(0, 200).filter((entry): entry is SupportMessage =>
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        typeof entry.userId === 'string' &&
+        typeof entry.username === 'string' &&
+        typeof entry.email === 'string' &&
+        typeof entry.subject === 'string' &&
+        entry.subject.length <= 120 &&
+        typeof entry.message === 'string' &&
+        entry.message.length <= 2000 &&
+        typeof entry.createdAt === 'string' &&
+        (entry.replyText === undefined || typeof entry.replyText === 'string')
+      )
+    : [];
 
 const careersList: CareerItem[] = [
   // Cybersecurity beginner
@@ -108,28 +203,10 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   
-  // Payment Screen flow states
-  const [paymentPendingUser, setPaymentPendingUser] = useState<UserAccount | null>(null);
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardHolder, setCardHolder] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCvv, setCardCvv] = useState('');
-  const [payError, setPayError] = useState('');
-  const [isPaying, setIsPaying] = useState(false);
-
-  // Email and Bank Transfer Verification States
-  const [emailVerificationPendingUser, setEmailVerificationPendingUser] = useState<UserAccount | null>(null);
-  const [emailCodeInput, setEmailCodeInput] = useState('');
-  const [googlePasswordInput, setGooglePasswordInput] = useState('');
-  const [showGooglePassword, setShowGooglePassword] = useState(false);
-  const [uploadedReceiptBase64, setUploadedReceiptBase64] = useState('');
-  const [bankOTPInput, setBankOTPInput] = useState('');
-
   // Support Messages States
   const [supportTickets, setSupportTickets] = useState<SupportMessage[]>([]);
   const [supportSubject, setSupportSubject] = useState('');
   const [supportBody, setSupportBody] = useState('');
-  const [supportReplyText, setSupportReplyText] = useState<{[key: string]: string}>({});
 
   // Core Data Lists
   const [links, setLinks] = useState<AdventureLink[]>([]);
@@ -147,7 +224,7 @@ export default function App() {
   const [inputPhotoUrl, setInputPhotoUrl] = useState('');
 
   // UI state
-  const [activeTab, setActiveTab] = useState<'links' | 'dishes' | 'photos' | 'careers' | 'support' | 'admin'>('careers');
+  const [activeTab, setActiveTab] = useState<'links' | 'dishes' | 'photos' | 'careers' | 'support'>('careers');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -157,99 +234,80 @@ export default function App() {
   const [careerCategory, setCareerCategory] = useState<'all' | 'cyber' | 'ai' | 'both' | 'high-salary'>('all');
   const [selectedCareerId, setSelectedCareerId] = useState<string | null>('soc-analyst-1');
   
-  // Expiry & Countdown timer state
-  const [remainingTime, setRemainingTime] = useState<number>(60);
-  const [showExpiryModal, setShowExpiryModal] = useState(false);
-  const [expiredUserRef, setExpiredUserRef] = useState<UserAccount | null>(null);
-
   // Load from LocalStorage
   useEffect(() => {
-    // 1. Users list
-    const savedUsers = localStorage.getItem('adv_users_v1');
-    let loadedUsers: UserAccount[] = [];
-    if (savedUsers) {
-      try {
-        loadedUsers = JSON.parse(savedUsers);
-      } catch (e) {
-        console.error('Failed to parse users');
-      }
-    }
+    let cancelled = false;
 
-    // Ensure prefilled/preset Admin account exists according to specifications
-    const adminEmail = 'esamsaif2016@gmail.com';
-    const adminExist = loadedUsers.find(u => u.email.toLowerCase() === adminEmail);
-    if (!adminExist) {
-      const defaultAdmin: UserAccount = {
-        id: 'usr-admin-preset',
-        username: 'عاصم سيف (المدير العام)',
-        email: adminEmail,
-        password: 'Esam@2016#New',
-        role: 'admin',
-        createdAt: new Date().toLocaleDateString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-        hasPaid: true,
-        paymentTime: new Date().toISOString(),
-        expired: false,
-        emailVerified: true,
-        isInfinite: true
-      };
-      loadedUsers.push(defaultAdmin);
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
-    } else {
-      // Keep credentials matches completely
-      loadedUsers = loadedUsers.map(u => {
-        if (u.email.toLowerCase() === adminEmail) {
-          return {
-            ...u,
-            username: u.username || 'عاصم سيف (المدير العام)',
-            password: 'Esam@2016#New',
-            role: 'admin',
-            hasPaid: true,
-            expired: false,
-            emailVerified: true,
-            isInfinite: true
-          };
+    void (async () => {
+      let parsedUsers: unknown = [];
+      const savedUsers = localStorage.getItem('adv_users_v1');
+      if (savedUsers) {
+        try {
+          parsedUsers = JSON.parse(savedUsers);
+        } catch {
+          localStorage.removeItem('adv_users_v1');
         }
-        return u;
-      });
-      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
-    }
-    setUsers(loadedUsers);
+      }
 
-    // 2. Logged in user
-    const savedSession = localStorage.getItem('adv_current_user_v1');
-    if (savedSession && loadedUsers.length > 0) {
-      try {
-        const parsedSession = JSON.parse(savedSession) as UserAccount;
-        // Verify user still exists in DB
-        const realUser = loadedUsers.find(u => u.id === parsedSession.id);
-        if (realUser) {
-          setCurrentUser(realUser);
-        } else {
+      const loadedUsers = await migrateStoredUsers(parsedUsers);
+      if (cancelled) {
+        return;
+      }
+
+      setUsers(loadedUsers);
+      localStorage.setItem('adv_users_v1', JSON.stringify(loadedUsers));
+
+      const savedSession = localStorage.getItem('adv_current_user_v1');
+      if (savedSession && loadedUsers.length > 0) {
+        try {
+          const parsedSession: unknown = JSON.parse(savedSession);
+          const sessionId = isRecord(parsedSession) && typeof parsedSession.id === 'string'
+            ? parsedSession.id
+            : null;
+          const realUser = loadedUsers.find(user => user.id === sessionId);
+          if (realUser) {
+            setCurrentUser(realUser);
+            localStorage.setItem(
+              'adv_current_user_v1',
+              JSON.stringify({ id: realUser.id }),
+            );
+          } else {
+            localStorage.removeItem('adv_current_user_v1');
+          }
+        } catch {
           localStorage.removeItem('adv_current_user_v1');
         }
-      } catch (e) {
-        console.error('Failed to parse session');
       }
-    }
+    })();
 
-    // 3. Support Tickets list
     const savedTickets = localStorage.getItem('adv_support_messages_v1');
     if (savedTickets) {
       try {
-        setSupportTickets(JSON.parse(savedTickets));
-      } catch (_) {}
+        const parsedTickets: unknown = JSON.parse(savedTickets);
+        setSupportTickets(readStoredSupportMessages(parsedTickets));
+      } catch {
+        localStorage.removeItem('adv_support_messages_v1');
+      }
     }
 
-    // 3b. Links list
     const savedLinks = localStorage.getItem('adv_links_v1');
     if (savedLinks) {
-      try { setLinks(JSON.parse(savedLinks)); } catch (_) {}
+      try {
+        const parsedLinks: unknown = JSON.parse(savedLinks);
+        setLinks(readStoredLinks(parsedLinks));
+      } catch {
+        localStorage.removeItem('adv_links_v1');
+      }
     }
 
-    // 4. Dishes list
     const savedDishes = localStorage.getItem('adv_dishes_v1');
     if (savedDishes) {
-      try { setDishes(JSON.parse(savedDishes)); } catch (_) {}
+      try {
+        const parsedDishes: unknown = JSON.parse(savedDishes);
+        setDishes(readStoredDishes(parsedDishes));
+      } catch {
+        localStorage.removeItem('adv_dishes_v1');
+      }
     } else {
       // Clean default food presets
       const defaultDishes: FavoriteDish[] = [
@@ -259,16 +317,23 @@ export default function App() {
       setDishes(defaultDishes);
     }
 
-    // 5. Photos list
     const savedPhotos = localStorage.getItem('adv_photos_v1');
     if (savedPhotos) {
-      try { setPhotos(JSON.parse(savedPhotos)); } catch (_) {}
+      try {
+        const parsedPhotos: unknown = JSON.parse(savedPhotos);
+        setPhotos(readStoredPhotos(parsedPhotos));
+      } catch {
+        localStorage.removeItem('adv_photos_v1');
+      }
     } else {
       const defaultPhotos: FavoritePhoto[] = [
         { id: 'photo-1', title: 'بوابة المغامرة الأولى 🚪', url: 'PRESET_ICON:🌌', createdAt: '١٢:٤٠ م', userId: 'all' }
       ];
       setPhotos(defaultPhotos);
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Save actions to local storage helper
@@ -292,67 +357,24 @@ export default function App() {
     localStorage.setItem('adv_photos_v1', JSON.stringify(updatedPhotos));
   };
 
-  // Check user existence in users list (handles deleted account in single or multiple windows)
   useEffect(() => {
     if (currentUser) {
       const exists = users.find(u => u.id === currentUser.id);
       if (users.length > 0 && !exists) {
-        // Logged-in user was deleted by Admin! Boot immediately!
         setCurrentUser(null);
         localStorage.removeItem('adv_current_user_v1');
-        playSynthSound(150, 'sawtooth', 0.5); // fail buzzer
-        setErrorMsg('تم حذف حسابك من قبل المدير العام!');
+        playSynthSound(150, 'sawtooth', 0.5);
+        setErrorMsg('لم يعد الملف المحلي متوفراً.');
       }
     }
   }, [users, currentUser]);
 
-  // Hidden/Regular user 1-minute expiration prank clock logic
-  useEffect(() => {
-    if (!currentUser || currentUser.role === 'admin' || !currentUser.hasPaid || currentUser.isInfinite) {
-      return;
-    }
-
-    const interval = setInterval(() => {
-      if (!currentUser.paymentTime) return;
-      
-      const elapsedMs = Date.now() - new Date(currentUser.paymentTime).getTime();
-      const LIMIT_MS = 60 * 1000; // Under prank rule: duration is exactly 1 minute
-      const timeLeftSc = Math.max(0, Math.ceil((LIMIT_MS - elapsedMs) / 1000));
-      
-      setRemainingTime(timeLeftSc);
-
-      if (timeLeftSc <= 0) {
-        // Expiration triggers!
-        clearInterval(interval);
-        
-        // 1. Mark in user database as expired
-        const updatedUsers = users.map(u => {
-          if (u.id === currentUser.id) {
-            return { ...u, expired: true };
-          }
-          return u;
-        });
-        saveUsersToStorage(updatedUsers);
-
-        // 2. Play warning alert audio siren
-        playAlarmSiren();
-
-        // 3. Set expired modal states & logout
-        setExpiredUserRef(currentUser);
-        setShowExpiryModal(true);
-        setCurrentUser(null);
-        localStorage.removeItem('adv_current_user_v1');
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [currentUser, users]);
-
-  // Synthesis engine for retro neon sound effects
   const playSynthSound = (frequency: number, type: OscillatorType, duration: number) => {
     if (!soundEnabled) return;
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as AudioEnabledWindow).webkitAudioContext;
       if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const osc = ctx.createOscillator();
@@ -375,95 +397,59 @@ export default function App() {
     } catch {}
   };
 
-  const playAlarmSiren = () => {
-    if (!soundEnabled) return;
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      
-      let time = ctx.currentTime;
-      for (let i = 0; i < 4; i++) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(587.33, time);
-        osc.frequency.linearRampToValueAtTime(880, time + 0.25);
-        osc.frequency.linearRampToValueAtTime(587.33, time + 0.5);
-        
-        gain.gain.setValueAtTime(0.12, time);
-        gain.gain.exponentialRampToValueAtTime(0.01, time + 0.5);
-        
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(time);
-        osc.stop(time + 0.5);
-        time += 0.5;
-      }
-    } catch {}
-  };
-
   const playAddSound = () => playSynthSound(440, 'triangle', 0.15); // Add
   const playCompleteSound = () => playSynthSound(880, 'sine', 0.2); // Check custom chime
   const playDeleteSound = () => playSynthSound(180, 'sawtooth', 0.25); // Delete item sound
 
-  // Authentication Flow Handlers
-  // Authentication Flow Handlers
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
-    if (!regUsername.trim() || !regEmail.trim() || !regPassword.trim()) {
-      setErrorMsg('فضلاً أكمل كافة الحقول لتسجيل حسابك!');
+    const username = regUsername.trim();
+    const email = regEmail.trim().toLowerCase();
+    if (
+      username.length < 2 ||
+      username.length > 50 ||
+      email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      regPassword.length < 10 ||
+      regPassword.length > 128
+    ) {
+      setErrorMsg('تحقق من البريد، واجعل الاسم بين 2 و50 حرفاً وكلمة المرور بين 10 و128 حرفاً.');
       return;
     }
 
-    // Check duplicate username or email
-    const duplicate = users.find(u => u.username.toLowerCase() === regUsername.toLowerCase() || u.email.toLowerCase() === regEmail.toLowerCase());
+    const duplicate = users.find(u =>
+      u.username.toLowerCase() === username.toLowerCase() ||
+      u.email === email
+    );
     if (duplicate) {
       setErrorMsg('اسم المستخدم أو البريد الإلكتروني مسجل مسبقاً!');
       return;
     }
 
-    // Role Rule: First account to register in system is automatically ADMIN. Others are REGULAR.
-    const isFirst = users.length === 0;
     const newUser: UserAccount = {
-      id: 'usr-' + Date.now(),
-      username: regUsername.trim(),
-      email: regEmail.trim().toLowerCase(),
-      password: regPassword.trim(),
-      role: isFirst ? 'admin' : 'regular',
+      id: crypto.randomUUID(),
+      username,
+      email,
+      passwordHash: await createPasswordHash(regPassword),
+      role: 'regular',
       createdAt: new Date().toLocaleDateString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-      hasPaid: isFirst, // Admin is free infinite
-      paymentTime: isFirst ? new Date().toISOString() : null,
-      expired: false,
-      emailVerified: isFirst ? true : false,
-      emailVerificationCode: '7729'
     };
 
     const nextUsers = [...users, newUser];
     saveUsersToStorage(nextUsers);
-
-    // Reset Form fields
     setRegUsername('');
     setRegEmail('');
     setRegPassword('');
-
-    if (newUser.role === 'admin') {
-      // Direct success login for Admin
-      setCurrentUser(newUser);
-      localStorage.setItem('adv_current_user_v1', JSON.stringify(newUser));
-      setSuccessMsg(`أهلاً بك! لقد تم تسجيلك "كمدير عام" للنظام وتفعيل حسابك مجاناً مدى الحياة 👑`);
-      playCompleteSound();
-    } else {
-      // Normal user needs to verify their email FIRST
-      setEmailVerificationPendingUser(newUser);
-      playSynthSound(480, 'sine', 0.3);
-    }
+    setCurrentUser(newUser);
+    localStorage.setItem('adv_current_user_v1', JSON.stringify({ id: newUser.id }));
+    setSuccessMsg('تم إنشاء ملفك المحلي وتسجيل الدخول.');
+    playCompleteSound();
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
@@ -473,176 +459,31 @@ export default function App() {
       return;
     }
 
-    const found = users.find(u => u.email.toLowerCase() === loginEmail.trim().toLowerCase());
-    if (!found) {
-      setErrorMsg('البريد الإلكتروني هذا غير متوفر! يرجى إنشاء حساب جديد.');
+    const found = users.find(u => u.email === loginEmail.trim().toLowerCase());
+    if (!found || !(await verifyPassword(loginPassword, found.passwordHash))) {
+      setErrorMsg('بيانات تسجيل الدخول غير صحيحة.');
       return;
     }
 
-    // Verify Password match
-    if (found.password && found.password !== loginPassword) {
-      setErrorMsg('كلمة المرور غير صحيحة! يرجى إعادة المحاولة.');
-      return;
-    }
-
-    // Check if normal user email not verified
-    if (found.role === 'regular' && !found.emailVerified) {
-      setEmailVerificationPendingUser(found);
-      playSynthSound(480, 'sine', 0.3);
-      return;
-    }
-
-    // Check if normal user is currently waiting for admin approval
-    if (found.role === 'regular' && found.paymentPendingVerification) {
-      setErrorMsg('⏳ معاملاتك معلقة! تفويضك والتحويل قيد المراجعة والمطابقة من قبل المدير العام (esamsaif2016@gmail.com). يرجى معاودة تصفح الموقع والولوج بمجرد اعتمادها.');
-      return;
-    }
-
-    // Check if normal user expired (their 1 minute clock limit is up under local record)
-    if (found.role === 'regular' && found.expired) {
-      setExpiredUserRef(found);
-      setShowExpiryModal(true);
-      return;
-    }
-
-    // Check if normal user paid or needs payment
-    if (found.role === 'regular' && !found.hasPaid) {
-      setPaymentPendingUser(found);
-      playSynthSound(480, 'sine', 0.3);
-      return;
-    }
-
-    // Allow Login
     setCurrentUser(found);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(found));
-    setSuccessMsg(`مرحباً مجدداً، ${found.username}! تم تسجيل دخولك بأمان.`);
+    localStorage.setItem('adv_current_user_v1', JSON.stringify({ id: found.id }));
+    setLoginPassword('');
+    setSuccessMsg(`مرحباً مجدداً، ${found.username}!`);
     playCompleteSound();
   };
 
-  // Direct email verification check handler
-  const handleVerifyEmailSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    if (!emailVerificationPendingUser) return;
-
-    if (!googlePasswordInput.trim()) {
-      setErrorMsg('الرجاء إدخال كلمة مرور حساب Google الرسمي الخاصة بك لتأكيد هوية التفعيل الأمنية.');
-      return;
-    }
-
-    if (emailCodeInput.trim() !== '7729') {
-      setErrorMsg('رمز التحقق غير صحيح! تفقد كود الـ OTP الوارد في قالب بريد جوجل الرسمي المرفق أدناه.');
-      return;
-    }
-
-    // Mark as verified
-    const updatedUsers = users.map(u => {
-      if (u.id === emailVerificationPendingUser.id) {
-        return {
-          ...u,
-          emailVerified: true
-        };
-      }
-      return u;
-    });
-
-    saveUsersToStorage(updatedUsers);
-    const updatedUserObj = updatedUsers.find(u => u.id === emailVerificationPendingUser.id)!;
-
-    // Reset pending registration
-    setEmailVerificationPendingUser(null);
-    setEmailCodeInput('');
-    setGooglePasswordInput('');
-
-    // Move next to secure payment portal
-    setPaymentPendingUser(updatedUserObj);
-
-    setSuccessMsg('✅ رائع! تم تأكيد بريدك الإلكتروني بنجاح. الرجاء الآن متابعة التحويل المصرفي لتنشيط العضوية.');
-    playCompleteSound();
-  };
-
-  // Process manual Bank transfer with card/receipt image upload (no electronic gateway)
-  const handleProcessBankTransfer = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPayError('');
-    setIsPaying(true);
-
-    if (!uploadedReceiptBase64) {
-      setPayError('برجاء إرفاق صورة البطاقة البنكية أو إيصال التحويل (ميزة صورة البطاقة) لرفعها إلى المدير!');
-      setIsPaying(false);
-      return;
-    }
-
-    if (bankOTPInput.trim() !== '9945') {
-      setPayError('رمز تحقق الهاتف البنكي OTP غير صحيح! رمز التأكيد المعتمد للمحاكاة هو: 9945');
-      setIsPaying(false);
-      return;
-    }
-
-    setTimeout(() => {
-      if (!paymentPendingUser) {
-        setIsPaying(false);
-        return;
-      }
-
-      const updatedUsers = users.map(u => {
-        if (u.id === paymentPendingUser.id) {
-          return {
-            ...u,
-            paymentPendingVerification: true,
-            bankTransferReceipt: uploadedReceiptBase64,
-            bankTransferOTP: bankOTPInput.trim()
-          };
-        }
-        return u;
-      });
-
-      saveUsersToStorage(updatedUsers);
-
-      setPaymentPendingUser(null);
-      setUploadedReceiptBase64('');
-      setBankOTPInput('');
-      setIsPaying(false);
-
-      setSuccessMsg('✅ تم رفع معاملة التحويل البنكي مدمجة بـ "صورة البطاقة" بنجاح! تم إحالتها إلى المدير العام (esamsaif2016@gmail.com) للمطابقة الفورية.');
-      playCompleteSound();
-    }, 1500);
-  };
-
-  const handleReceiptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2.5 * 1024 * 1024) {
-        setPayError('الحجم الأقصى المتاح للصورة هو 2.5 ميغابايت!');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setUploadedReceiptBase64(reader.result as string);
-        playCompleteSound();
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  // Seed default dummy bank card receipt base64 if user does not upload theirs
-  const handleSeedMockReceipt = () => {
-    const mockCardBase64 = "PRESET_ICON:💳";
-    setUploadedReceiptBase64(mockCardBase64);
-    playCompleteSound();
-    setSuccessMsg("📸 تم تحميل بطاقة ذكية افتراضية مجهّزة لغرض المعاينة بنجاح!");
-  };
-
-  // Support Message / Help ticket handlers
   const handleSendSupportTicket = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setSuccessMsg('');
 
     if (!currentUser) return;
-    if (!supportSubject.trim() || !supportBody.trim()) {
+    if (
+      !supportSubject.trim() ||
+      !supportBody.trim() ||
+      supportSubject.trim().length > 120 ||
+      supportBody.trim().length > 2000
+    ) {
       setErrorMsg('الرجاء إكمال موضوع ونص رسالة الدعم الفني لمساعدتك!');
       return;
     }
@@ -663,115 +504,10 @@ export default function App() {
 
     setSupportSubject('');
     setSupportBody('');
-    setSuccessMsg('✅ تم توصيل رسالتك للمدير العام بنجاح! سيتم مراجعة طلبك وإدراج الإجابة هنا قريباً.');
+    setSuccessMsg('تم حفظ ملاحظتك محلياً في هذا المتصفح.');
     playCompleteSound();
   };
 
-  const handleAdminReplyTicket = (ticketId: string) => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-    const reply = supportReplyText[ticketId];
-    if (!reply || !reply.trim()) {
-      setErrorMsg('فضلاً أدخل نص الرد الموجه للمشترك أولاً!');
-      return;
-    }
-
-    const nextTickets = supportTickets.map(t => {
-      if (t.id === ticketId) {
-        return {
-          ...t,
-          replyText: reply.trim()
-        };
-      }
-      return t;
-    });
-
-    setSupportTickets(nextTickets);
-    localStorage.setItem('adv_support_messages_v1', JSON.stringify(nextTickets));
-
-    setSupportReplyText(prev => ({
-      ...prev,
-      [ticketId]: ''
-    }));
-    setSuccessMsg('💬 تم تدوين رصيد الرد وتوصيله للملف الشخصي بنجاح!');
-    playCompleteSound();
-  };
-
-  // Admin approves manual transfers
-  const handleAdminApprovePayment = (userId: string, makeInfinite: boolean) => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    const nextUsers = users.map(u => {
-      if (u.id === userId) {
-        return {
-          ...u,
-          hasPaid: true,
-          paymentPendingVerification: false,
-          paymentTime: new Date().toISOString(),
-          isInfinite: makeInfinite,
-          expired: false
-        };
-      }
-      return u;
-    });
-
-    saveUsersToStorage(nextUsers);
-    
-    // Refresh current user if they are logging in from a separate simulated perspective 
-    setSuccessMsg(makeInfinite 
-      ? '👑 رائع! تم تفعيل ترخيص حساب العضو بنطاق لانهائي ومدى الحياة بنجاح! (تم إلغاء مؤقت الدقيقة)' 
-      : '⏳ تم تفعيل ترخيص حساب العضو بشكل عادي مع مؤقت مهلة الأبدية دقيقة واحدة بنجاح!'
-    );
-    playCompleteSound();
-  };
-
-  const handleAdminRejectPayment = (userId: string) => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    const nextUsers = users.map(u => {
-      if (u.id === userId) {
-        return {
-          ...u,
-          paymentPendingVerification: false,
-          bankTransferReceipt: undefined,
-          bankTransferOTP: undefined
-        };
-      }
-      return u;
-    });
-
-    saveUsersToStorage(nextUsers);
-    setSuccessMsg('❌ تم رفض طلب تفعيل وإثبات تحويل هذا العضو.');
-    playDeleteSound();
-  };
-
-  // Skip payment and log in directly as regular user
-  const handleSkipPayment = () => {
-    if (!paymentPendingUser) return;
-    
-    // Set user as regular user, bypass payment. They will still expire in exactly 1 minute
-    const updatedUsers = users.map(u => {
-      if (u.id === paymentPendingUser.id) {
-        return {
-          ...u,
-          hasPaid: true,
-          paymentTime: new Date().toISOString()
-        };
-      }
-      return u;
-    });
-
-    saveUsersToStorage(updatedUsers);
-
-    const activeUserObj = updatedUsers.find(u => u.id === paymentPendingUser.id)!;
-    setCurrentUser(activeUserObj);
-    localStorage.setItem('adv_current_user_v1', JSON.stringify(activeUserObj));
-
-    setPaymentPendingUser(null);
-    setSuccessMsg('تم تأكيد تخطي الدفع بنجاح! تم تنشيط الحساب العادي (صلاحية مجازية لمدة دقيقة واحدة!) ⏳🚪');
-    playCompleteSound();
-  };
-
-  // Log Out
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('adv_current_user_v1');
@@ -792,15 +528,16 @@ export default function App() {
       return;
     }
 
-    let urlFormatted = inputUrl.trim();
-    if (!/^https?:\/\//i.test(urlFormatted)) {
-      urlFormatted = 'https://' + urlFormatted;
+    let urlFormatted: string;
+    try {
+      urlFormatted = normalizeHttpUrl(inputUrl);
+    } catch {
+      setErrorMsg('تنسيق رابط غير صالح!');
+      return;
     }
 
-    try {
-      new URL(urlFormatted);
-    } catch (_) {
-      setErrorMsg('تنسيق رابط غير صالح!');
+    if (inputUrlName.trim().length > 100) {
+      setErrorMsg('اسم الرابط يجب ألا يتجاوز 100 حرف.');
       return;
     }
 
@@ -847,8 +584,12 @@ export default function App() {
     setSuccessMsg('');
 
     if (!currentUser) return;
-    if (!inputDish.trim()) {
+    if (!inputDish.trim() || inputDish.trim().length > 100) {
       setErrorMsg('الرجاء كتابة اسم وجبتك المفضلة!');
+      return;
+    }
+    if (inputDishImage && !isSafeImageSource(inputDishImage)) {
+      setErrorMsg('مصدر الصورة غير مسموح. استخدم رابط HTTP/HTTPS أو ملف صورة صالح.');
       return;
     }
 
@@ -872,6 +613,10 @@ export default function App() {
   const handleDeviceImageUpload = (e: React.ChangeEvent<HTMLInputElement>, isForPhoto: boolean) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) {
+        setErrorMsg('نوع الصورة غير مدعوم. استخدم PNG أو JPEG أو GIF أو WebP.');
+        return;
+      }
       if (file.size > 1.8 * 1024 * 1024) {
         setErrorMsg('حجم الملف كبير جداً! اختر صورة أقل من 1.8 ميغابايت للحفظ المحلي.');
         return;
@@ -918,8 +663,12 @@ export default function App() {
     setSuccessMsg('');
 
     if (!currentUser) return;
-    if (!inputPhotoTitle.trim()) {
+    if (!inputPhotoTitle.trim() || inputPhotoTitle.trim().length > 100) {
       setErrorMsg('برجاء كتابة عنوان لصورتك المفضلة!');
+      return;
+    }
+    if (inputPhotoUrl && !isSafeImageSource(inputPhotoUrl)) {
+      setErrorMsg('مصدر الصورة غير مسموح. استخدم رابط HTTP/HTTPS أو ملف صورة صالح.');
       return;
     }
 
@@ -961,70 +710,6 @@ export default function App() {
     playDeleteSound();
   };
 
-  // Admin Control Operations
-  const handleAdminDeleteUser = (userIdToDelete: string) => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    // Delete user from active users dataset
-    const nextUsers = users.filter(u => u.id !== userIdToDelete);
-    saveUsersToStorage(nextUsers);
-
-    // Filter and delete that user's local linked items as well for database clean sweep
-    const nextLinks = links.filter(l => l.userId !== userIdToDelete);
-    saveLinksToStorage(nextLinks);
-
-    const nextDishes = dishes.filter(d => d.userId !== userIdToDelete);
-    saveDishesToStorage(nextDishes);
-
-    const nextPhotos = photos.filter(p => p.userId !== userIdToDelete);
-    savePhotosToStorage(nextPhotos);
-
-    playDeleteSound();
-    setSuccessMsg('تم حذف الحساب وكافة بياناته من الهرم المركزي بنجاح!');
-  };
-
-  // Wipe all regular users at once
-  const handleAdminWipeAllUsers = () => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    // Filter to keep only the Admin
-    const adminUser = users.find(u => u.role === 'admin');
-    const nextUsers = adminUser ? [adminUser] : [];
-    saveUsersToStorage(nextUsers);
-
-    // Keep only links/dishes/photos of the admin and basic presets
-    const nextLinks = links.filter(l => l.userId === 'all' || (adminUser && l.userId === adminUser.id));
-    saveLinksToStorage(nextLinks);
-
-    const nextDishes = dishes.filter(d => d.userId === 'all' || (adminUser && d.userId === adminUser.id));
-    saveDishesToStorage(nextDishes);
-
-    const nextPhotos = photos.filter(p => p.userId === 'all' || (adminUser && p.userId === adminUser.id));
-    savePhotosToStorage(nextPhotos);
-
-    playDeleteSound();
-    setSuccessMsg('💀 تم إتلاف وحذف جميع الحسابات العادية الأخرى بالكامل وتصفير النظام!');
-  };
-
-  const handleAdminResetExpiry = (normalUser: UserAccount) => {
-    if (!currentUser || currentUser.role !== 'admin') return;
-
-    const nextUsers = users.map(u => {
-      if (u.id === normalUser.id) {
-        return {
-          ...u,
-          expired: false,
-          paymentTime: new Date().toISOString() // gives them another 60 seconds
-        };
-      }
-      return u;
-    });
-
-    saveUsersToStorage(nextUsers);
-    playCompleteSound();
-    setSuccessMsg(`تم تمديد أبدية إضافية (دقيقة واحدة ⏳) للمستخدم: ${normalUser.username}!`);
-  };
-
   const getShortUrlString = (fullUrl: string) => {
     try {
       const parsed = new URL(fullUrl);
@@ -1035,12 +720,18 @@ export default function App() {
   };
 
   // Scoped Data Arrays (Each user sees their own items, keeping it fully personal and organized)
-  const scopedLinks = links.filter(l => l.userId === 'all' || (currentUser && l.userId === currentUser.id));
-  const scopedDishes = dishes.filter(d => d.userId === 'all' || (currentUser && d.userId === currentUser.id));
-  const scopedPhotos = photos.filter(p => p.userId === 'all' || (currentUser && p.userId === currentUser.id));
-
-  const totalRegisteredUsersCount = users.length;
-  const totalRegularCount = users.filter(u => u.role === 'regular').length;
+  const scopedLinks = links.filter(l =>
+    isSafeHttpUrl(l.url) &&
+    (l.userId === 'all' || (currentUser && l.userId === currentUser.id))
+  );
+  const scopedDishes = dishes.filter(d =>
+    isSafeImageSource(d.image) &&
+    (d.userId === 'all' || (currentUser && d.userId === currentUser.id))
+  );
+  const scopedPhotos = photos.filter(p =>
+    isSafeImageSource(p.url) &&
+    (p.userId === 'all' || (currentUser && p.userId === currentUser.id))
+  );
 
   return (
     <div className="min-h-screen font-sans bg-[#0c0c0e] text-gray-100 flex flex-col justify-between relative selection:bg-red-600/30 selection:text-white" dir="rtl">
@@ -1072,7 +763,7 @@ export default function App() {
           <span>بوابة المغامرة الرقمية</span>
           {currentUser && (
             <span className="text-red-400 font-bold bg-red-950/40 px-1.5 py-0.5 rounded leading-none">
-              {currentUser.role === 'admin' ? 'مستشار المدير الأعلى 👑' : 'مغامر مسجل 🎟️'}
+              ملف محلي 🎟️
             </span>
           )}
         </div>
@@ -1114,7 +805,7 @@ export default function App() {
             </div>
 
             <p className="text-xs text-gray-400 max-w-sm mx-auto leading-relaxed">
-              بوابة التحقق المدمجة: أدرج روابطك الذكية، وجباتك المفضلة، وصورك الفريدة مدى الحياة.
+              مساحة محلية لحفظ روابطك ووجباتك وصورك على هذا الجهاز.
             </p>
           </div>
 
@@ -1134,7 +825,7 @@ export default function App() {
           )}
 
           {/* ------------------------ AUTH / LOGIN / REGISTRATION SCENARIOS ------------------------ */}
-          {!currentUser && !paymentPendingUser && !emailVerificationPendingUser && (
+          {!currentUser && (
             <div className="max-w-md mx-auto w-full bg-[#111113]/90 border border-neutral-800 p-6 sm:p-8 rounded-2xl shadow-2xl relative overflow-hidden border-neon-red">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-red-500/50 to-transparent"></div>
               
@@ -1165,6 +856,8 @@ export default function App() {
                     <input
                       type="text"
                       required
+                      minLength={2}
+                      maxLength={50}
                       value={regUsername}
                       onChange={(e) => setRegUsername(e.target.value)}
                       placeholder="اكتب اسمك للمغامرة..."
@@ -1177,6 +870,7 @@ export default function App() {
                     <input
                       type="email"
                       required
+                      maxLength={254}
                       value={regEmail}
                       onChange={(e) => setRegEmail(e.target.value)}
                       placeholder="name@example.com"
@@ -1190,6 +884,8 @@ export default function App() {
                     <input
                       type="password"
                       required
+                      minLength={10}
+                      maxLength={128}
                       value={regPassword}
                       onChange={(e) => setRegPassword(e.target.value)}
                       placeholder="••••••••"
@@ -1198,13 +894,9 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Informational Box regarding dynamic Admin Rule */}
                   <div className="p-3 bg-red-950/20 border border-red-900/30 rounded-lg text-[10.5px] text-gray-400 leading-relaxed">
-                    <span className="font-bold text-red-400 block mb-0.5">⚠️ قواعد بوابة المغامرة:</span>
-                    <ul className="list-disc list-inside space-y-1 text-right">
-                      <li>الحساب الأول في النظام يتم تفعيله كـ <span className="text-white font-bold">"مدير عام"</span> مجاناً ومدى الحياة! 👑</li>
-                      <li>الحسابات اللاحقة تتطلب تفعيل بريدها تم اشتراك بقيمة <span className="text-red-400 font-bold">1,000﷼ لانهائي</span>.</li>
-                    </ul>
+                    <span className="font-bold text-red-400 block mb-0.5">ملاحظة الخصوصية:</span>
+                    كلمة المرور تُشتق محلياً ولا تُحفظ كنص واضح. البيانات تبقى في هذا المتصفح ولا تمثل حساباً سحابياً.
                   </div>
 
                   <button
@@ -1221,6 +913,7 @@ export default function App() {
                     <input
                       type="email"
                       required
+                      maxLength={254}
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
                       placeholder="name@example.com"
@@ -1234,6 +927,7 @@ export default function App() {
                     <input
                       type="password"
                       required
+                      maxLength={128}
                       value={loginPassword}
                       onChange={(e) => setLoginPassword(e.target.value)}
                       placeholder="••••••••"
@@ -1253,331 +947,6 @@ export default function App() {
             </div>
           )}
 
-          {/* ------------------------ STEP 1: E-MAIL VERIFICATION PANEL ------------------------ */}
-          {emailVerificationPendingUser && (
-            <div className="max-w-md mx-auto w-full bg-[#111113] border border-red-900/30 p-6 sm:p-8 rounded-2xl shadow-3xl text-right animate-fade-in relative">
-              <div className="absolute top-0 left-0 w-full h-1 bg-red-600"></div>
-
-              <div className="flex items-center gap-3 mb-5 pb-3 border-b border-neutral-900">
-                <div className="p-2.5 bg-red-950/50 text-red-500 rounded-lg">
-                  <span className="text-lg">📧</span>
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-gray-100">التحقق من البريد الإلكتروني</h3>
-                  <p className="text-[10px] text-gray-500">حساب: {emailVerificationPendingUser.username}</p>
-                </div>
-              </div>
-
-              <form onSubmit={handleVerifyEmailSubmit} className="space-y-4">
-                <div className="space-y-3">
-                  <p className="text-[11px] text-gray-400 leading-relaxed">
-                    تم إرسال كود التحقق الآمن إلى بريدك الإلكتروني. تفقد نموذج الرسالة الرسمية الواردة من نظام Google أدناه للحصول على رمز التفعيل:
-                  </p>
-
-                  {/* Simulated Google Accounts Official Email Mockup */}
-                  <div className="bg-white text-gray-800 rounded-xl overflow-hidden border border-gray-200 shadow-lg text-right font-sans text-xs">
-                    {/* Email Client Top Bar */}
-                    <div className="bg-gray-100 px-3.5 py-2 border-b border-gray-200 flex justify-between items-center text-[10px] text-gray-500 font-mono">
-                      <div className="flex items-center gap-1">
-                        <span className="w-2.5 h-2.5 rounded-full bg-red-400"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-yellow-400"></span>
-                        <span className="w-2.5 h-2.5 rounded-full bg-green-400"></span>
-                      </div>
-                      <span>بريد Google الرسمي الوارد 📬</span>
-                    </div>
-
-                    {/* Header Info */}
-                    <div className="p-3.5 bg-gray-50/70 border-b border-gray-100 space-y-1">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[11px] font-black text-gray-905 flex items-center gap-1">
-                          <span className="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
-                          جوجل بروتوكول الأمن <span className="text-gray-500 font-normal dir-ltr select-all">&lt;no-reply@accounts.google.com&gt;</span>
-                        </span>
-                        <span className="text-[9px] text-gray-400 font-mono">الآن</span>
-                      </div>
-                      <div className="text-gray-500 text-[10.5px]">
-                        <span className="font-bold text-gray-600">إلى:</span> أنت &lt;{emailVerificationPendingUser.email}&gt;
-                      </div>
-                      <div className="text-gray-700 text-[11px] font-bold mt-1 bg-white border border-gray-200/60 p-1.5 rounded-md inline-block">
-                        الموضوع: <span className="text-red-650">رمز تحقق حساب Google المؤقت لبوابة المغامرة</span>
-                      </div>
-                    </div>
-
-                    {/* Google Official Email Template Content */}
-                    <div className="p-5 space-y-4 text-right bg-white relative overflow-hidden">
-                      {/* Google Multi-Color Text Logo Simulation in pure CSS elements */}
-                      <div className="flex items-center justify-center gap-0.5 text-base font-black tracking-tighter select-none pb-2 border-b border-gray-100">
-                        <span className="text-blue-600">G</span>
-                        <span className="text-red-500">o</span>
-                        <span className="text-yellow-500">o</span>
-                        <span className="text-blue-600">g</span>
-                        <span className="text-green-500">l</span>
-                        <span className="text-red-500">e</span>
-                        <span className="text-xs text-gray-400 font-medium mr-1.5 border-r border-gray-200 pr-1.5 font-sans">الحسابات والأمان</span>
-                      </div>
-
-                      <div className="space-y-2.5 text-gray-700 leading-relaxed text-[11.5px]">
-                        <p className="font-bold">مرحباً مغامر بوابة المغامرة،</p>
-                        <p>
-                          لقد تلقينا طلباً لتأكيد التحقق من هويتك وتفعيل البوابة اللانهائية الخاصة بك. الرجاء استخدام رمز التحقق المؤقت التالي لإتمام العملية الأمنية:
-                        </p>
-                      </div>
-
-                      {/* Large verification Code with Blue Shield styling */}
-                      <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4.5 text-center my-4 space-y-1.5 max-w-[280px] mx-auto shadow-sm">
-                        <span className="text-[9.5px] text-blue-600 font-bold block">رمز التحقق لمرة واحدة (OTP) 🛡️</span>
-                        <span className="text-3xl font-black text-blue-700 tracking-[10px] font-mono select-all select-none block mr-2 bg-white/80 py-1.5 rounded-lg border border-blue-250">
-                          7729
-                        </span>
-                        <span className="text-[8.5px] text-gray-400 block font-medium">صالح هذا الرمز لمدة 10 دقائق فقط.</span>
-                      </div>
-
-                      <div className="space-y-2 text-[10px] text-gray-500 leading-relaxed border-t border-gray-100 pt-3">
-                        <p className="font-bold text-gray-600">لماذا تلقيت هذا البريد؟</p>
-                        <p>
-                          يتم إرسال هذا الرمز تلقائياً كرمز بريد Google آمن ومرخص بناءً على بروتوكول تفعيل غرفة البوابة والمجتمع المالي التابع للمدير عاصم.
-                        </p>
-                        <p className="text-[9.5px] italic text-red-500 font-bold">
-                          ⚠️ هام: لا تشارك هذا الرمز الآمن مع أي شخص لحماية حسابك من الإتلاف.
-                        </p>
-                      </div>
-
-                      {/* Google Footer */}
-                      <div className="text-center pt-2 text-[8.5px] text-gray-400 border-t border-gray-50 font-sans">
-                        © Google LLC, 1600 Amphitheatre Parkway, Mountain View, CA 94043
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Simulated Google Accounts Official Password Signin confirmation */}
-                <div className="bg-[#1a1a1e] border border-neutral-800 rounded-xl p-4.5 space-y-3.5 text-right font-sans">
-                  <div className="flex items-center justify-between border-b border-neutral-800/60 pb-2">
-                    <div className="flex items-center gap-1.5">
-                      <Shield className="w-4 h-4 text-blue-400" />
-                      <span className="text-[11px] font-black text-blue-400">تحقق أمان Google المزدوج 🔐</span>
-                    </div>
-                    <span className="text-[9px] bg-blue-950 text-blue-300 border border-blue-900/40 px-2 py-0.5 rounded-full font-bold">بوابة Google الآمنة</span>
-                  </div>
-
-                  <p className="text-[10px] text-gray-400 leading-normal">
-                    بشرط تأمين الهوية لنطاق Google لتفعيل بوابات العبور، يرجى كتابة كلمة مرور حساب Google الرسمي الخاص بك:
-                  </p>
-
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10.5px] font-bold text-gray-300">كلمة مرور بريدك الإلكتروني Google:</label>
-                      <button 
-                        type="button"
-                        onClick={() => setShowGooglePassword(!showGooglePassword)}
-                        className="text-[9.5px] text-blue-400 hover:text-blue-300 font-bold transition-colors cursor-pointer"
-                      >
-                        {showGooglePassword ? 'إخفاء كلمة المرور 👁️' : 'عرض كلمة المرور 👁️'}
-                      </button>
-                    </div>
-                    <input
-                      type={showGooglePassword ? "text" : "password"}
-                      required
-                      value={googlePasswordInput}
-                      onChange={(e) => setGooglePasswordInput(e.target.value)}
-                      placeholder="أدخل كلمة مرور بريدك الإلكتروني لـ Google"
-                      className="w-full bg-[#121214] border border-neutral-800 rounded-lg py-2 px-3 text-xs text-center text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500/50 font-mono"
-                      dir="ltr"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-gray-400">أدخل رمز الـ OTP المكون من 4 خانات:</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={4}
-                    value={emailCodeInput}
-                    onChange={(e) => setEmailCodeInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="7729"
-                    className="w-full bg-[#161619] border border-neutral-850 rounded-lg py-2.5 px-3 text-center text-sm font-black text-white focus:outline-none focus:ring-1 focus:ring-red-500/40 tracking-widest font-mono"
-                  />
-                </div>
-
-                <div className="space-y-2 pt-2">
-                  <button
-                    type="submit"
-                    className="w-full bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <span>تحقق من البريد الإلكتروني والتأكيد ⚔️</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmailCodeInput('7729');
-                      setGooglePasswordInput('GooglePass@2026');
-                      setSuccessMsg('⚡ تم حقن كود الـ OTP 7729 وكلمة مرور Google بنجاح! يرجى كبس زر التحقق للتأكيد.');
-                      playCompleteSound();
-                    }}
-                    className="w-full py-1.5 px-3 bg-[#18181c] hover:bg-neutral-800 text-rose-400 border border-neutral-850 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
-                  >
-                    حقن الحقول تلقائياً لتسهيل الاختبار ⚡
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setEmailVerificationPendingUser(null); setErrorMsg(''); }}
-                    className="w-full text-center text-xs text-gray-500 hover:text-gray-400 transition-colors cursor-pointer pt-1"
-                  >
-                    إلغاء والعودة للرئيسية
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* ------------------------ SECURE BANK TRANSFER PAYMENT PORTAL (1,000﷼) ------------------------ */}
-          {paymentPendingUser && (
-            <div className="max-w-md mx-auto w-full bg-[#111113] border border-red-900/30 p-6 sm:p-8 rounded-2xl shadow-3xl text-right animate-fade-in relative">
-              <div className="absolute top-0 left-0 w-full h-1 bg-red-500 animate-pulse"></div>
-
-              <div className="flex items-center gap-3 mb-5 pb-3 border-b border-neutral-900">
-                <div className="p-2.5 bg-red-950/50 text-red-500 rounded-lg">
-                  <Coins className="w-5 h-5 animate-spin" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-gray-100">بوابة التحويل المصرفي اليدوي</h3>
-                  <p className="text-[10px] text-gray-500">مطلوب لتنشيط حساب: {paymentPendingUser.username}</p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {/* Visual pricing showcase as specified */}
-                <div className="bg-red-950/10 border border-red-900/10 rounded-xl p-4 text-center space-y-1">
-                  <span className="text-[10px] text-red-400 font-bold block">قيمة الترخيص والولوج ذو الدقيقة الأبدية</span>
-                  {/* Explicit representation of the exact REQUIRED 1,000 Rial string. 1 Rial MUST NOT show. */}
-                  <h2 className="text-2xl font-black text-rose-500 tracking-wider font-mono">
-                    1,000 ريال سعودي 🇸🇦
-                  </h2>
-                  <span className="text-[9px] text-gray-500 block pt-1">(لا توجد بوابة دفع آلية - الدفع بموجب تحويل بنكي)</span>
-                </div>
-
-                {/* Instructions Box with IBAN */}
-                <div className="p-3 bg-neutral-900 border border-neutral-850 rounded-lg text-[10.5px] leading-relaxed text-gray-300 space-y-1">
-                  <div className="font-bold text-amber-500 flex items-center gap-1">🏦 معلومات الحساب المصرفي للتحويل:</div>
-                  <div className="text-gray-400 font-mono bg-neutral-950 p-2 rounded text-center border border-neutral-900 select-all my-1.5">
-                    <div>بنك الراجحي السعودي 🇸🇦</div>
-                    <div className="text-white font-bold tracking-wider pt-0.5">SA93 8000 0000 1234 5678 9012</div>
-                    <div className="text-[9.5px] text-gray-500">بإسم المشرف العام: عاصم سيف</div>
-                  </div>
-                  <p className="text-gray-500 text-[9.5px]">
-                    يرجى تحويل مبلغ <span className="font-bold text-white">1,000﷼</span> إلى الحساب المصرفي أعلاه، ثم أرفق صورة البطاقة المستخدمة أو إيصال التحويل بالأسفل للمطابقة.
-                  </p>
-                </div>
-
-                <form onSubmit={handleProcessBankTransfer} className="space-y-3.5">
-                  {/* Bank Photo Upload Slot (صورة البطاقة المخصصة للدفع أو إيصال التحويل البنكي) */}
-                  <div className="space-y-1.5 text-right">
-                    <label className="text-[11px] font-bold text-gray-400 block mb-1">
-                      📸 ترفيق لقطة شاشة البطاقة البنكية / إيصال التحويل:
-                    </label>
-                    
-                    <div className="relative border border-dashed border-neutral-800 bg-[#161619] rounded-xl p-4 text-center hover:border-red-900/50 transition-all">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleReceiptUpload}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                      />
-                      
-                      {uploadedReceiptBase64 ? (
-                        <div className="space-y-2">
-                          {uploadedReceiptBase64.startsWith('PRESET_ICON:') ? (
-                            <div className="text-4xl py-2">{uploadedReceiptBase64.split(':')[1]}</div>
-                          ) : (
-                            <img
-                              src={uploadedReceiptBase64}
-                              alt="Receipt"
-                              className="max-h-24 mx-auto rounded border border-neutral-800"
-                            />
-                          )}
-                          <span className="text-[10px] text-emerald-400 font-bold block">✓ تم تحميل صورة البطاقة بنجاح!</span>
-                        </div>
-                      ) : (
-                        <div className="space-y-1 text-gray-500">
-                          <span className="text-xl block">📤</span>
-                          <span className="text-[10.5px] block">اسحب ملف الصورة أو انقر للتصفح والتحميل</span>
-                          <span className="text-[9.5px] text-gray-600">الحد الأقصى للملف: 2.5 ميجابايت</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* SMS Bank Verification Code OTP Input */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <label className="text-[11px] font-bold text-gray-400">📲 رمز تأكيد سحب OTP بنك الراجحي المعتمد:</label>
-                      <span className="text-[9.5px] text-amber-500 font-mono">الرمز للتجريب: 9945</span>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      maxLength={4}
-                      value={bankOTPInput}
-                      onChange={(e) => setBankOTPInput(e.target.value.replace(/\D/g, ''))}
-                      placeholder="9945"
-                      className="w-full bg-[#161619] border border-neutral-850 rounded-lg py-2 px-3 text-center text-xs text-gray-250 focus:outline-none focus:ring-1 focus:ring-red-500/40 font-mono tracking-widest font-black"
-                    />
-                  </div>
-
-                  {payError && (
-                    <p className="text-[11px] text-red-400 font-bold bg-red-950/30 p-2.5 rounded border border-red-900/30">
-                      {payError}
-                    </p>
-                  )}
-
-                  <div className="pt-3 space-y-2.5">
-                    <button
-                      type="submit"
-                      disabled={isPaying}
-                      className="w-full bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold py-3 px-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:pointer-events-none cursor-pointer border border-rose-500/30 flex items-center justify-center gap-1.5"
-                    >
-                      {isPaying ? (
-                        <>
-                          <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                          <span>إرسال إثبات المعاملة للمراجعة...</span>
-                        </>
-                      ) : (
-                        <span>تأكيد إرسال التحويل وصورة البطاقة للمدير 📤</span>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleSeedMockReceipt}
-                      className="w-full py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer"
-                    >
-                      تحميل بطاقة التحويل واختبار فوري للتحويل 📸
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleSkipPayment}
-                      className="w-full bg-neutral-950 border border-neutral-900 hover:border-red-950/40 text-rose-400 hover:text-rose-300 text-xs font-bold py-2.5 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
-                    >
-                      <span>تخطي ودخول تجريبي مؤقت (دقيقة واحدة ⏳)</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => { setPaymentPendingUser(null); setErrorMsg(''); }}
-                      className="w-full text-center text-xs text-gray-500 hover:text-gray-400 transition-colors underline cursor-pointer pt-1"
-                    >
-                      إلغاء والعودة
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
-
           {/* ------------------------ CORE PORTAL WORKSPACE (FOR LOGGED USERS) ------------------------ */}
           {currentUser && (
             <div className="space-y-6 animate-fade-in relative z-10">
@@ -1586,44 +955,21 @@ export default function App() {
               <div className="bg-[#111113] border border-neutral-900 rounded-2xl p-4.5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-red-950/30 border border-red-900/40 flex items-center justify-center text-red-400 font-bold text-sm">
-                    {currentUser.role === 'admin' ? '👑' : '🔥'}
+                    🔥
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-gray-200">
                       مرحباً، {currentUser.username}!
                     </h3>
                     <p className="text-[10px] text-gray-500">
-                      {currentUser.role === 'admin' 
-                        ? 'أنت تمتلك صلاحيات "المدير العام المالي والأمني المطلق"' 
-                        : 'عضو مسجل (مستفيد من صلاحية الترخيص الأبدي)'
-                      }
+                      ملف شخصي محلي على هذا الجهاز
                     </p>
                   </div>
                 </div>
 
-                {/* Countdown display for regular users showing the prank duration countdown */}
-                {currentUser.role === 'regular' && (
-                  <div className={`px-4 py-2.5 rounded-xl border flex items-center gap-2.5 ${
-                    remainingTime < 20 
-                      ? 'bg-rose-950/30 border-rose-800/40 text-rose-400 animate-pulse' 
-                      : 'bg-[#18181c] border-neutral-850 text-gray-300'
-                  }`}>
-                    <Clock className="w-4 h-4 shrink-0 text-red-500 stroke-[2.5]" />
-                    <div className="text-right">
-                      <span className="text-[9px] text-gray-500 block leading-tight font-bold">صلاحية الأبدية:</span>
-                      <span className="text-xs font-mono font-bold">
-                        {remainingTime} ثانية متبقية ⏳
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {currentUser.role === 'admin' && (
-                  <div className="bg-[#18181c] border border-neutral-850 text-emerald-400 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 self-center">
-                    <Shield className="w-4 h-4" />
-                    <span>المدة: لانهائية (مفتوح بالكامل للأبد)</span>
-                  </div>
-                )}
+                <div className="bg-[#18181c] border border-neutral-850 text-emerald-400 px-3.5 py-2 rounded-xl text-xs font-bold self-center">
+                  التخزين محلي ومتاح دون دفع
+                </div>
               </div>
 
               {/* Functional Switch Tabs */}
@@ -1673,17 +1019,6 @@ export default function App() {
                   <HelpCircle className="w-4 h-4 text-orange-400" />
                   <span>مراسلة الدعم 💬</span>
                 </button>
-                {currentUser.role === 'admin' && (
-                  <button
-                    onClick={() => setActiveTab('admin')}
-                    className={`flex-1 min-w-[100px] py-2.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      activeTab === 'admin' ? 'bg-[#065f46] font-black text-white' : 'text-emerald-500/70 hover:text-emerald-400'
-                    }`}
-                  >
-                    <Shield className="w-4 h-4" />
-                    <span>لوحة المدير ({totalRegularCount})</span>
-                  </button>
-                )}
               </div>
 
               {/* ------------------------ TAB COLUMN 1: LINKS MANAGEMENT ------------------------ */}
@@ -1702,6 +1037,7 @@ export default function App() {
                         <input
                           type="text"
                           required
+                          maxLength={2048}
                           value={inputUrl}
                           onChange={(e) => setInputUrl(e.target.value)}
                           placeholder="رابط الإنترنت مثلاً: https://epic.ai"
@@ -1712,6 +1048,7 @@ export default function App() {
                       <div className="space-y-1">
                         <input
                           type="text"
+                          maxLength={100}
                           value={inputUrlName}
                           onChange={(e) => setInputUrlName(e.target.value)}
                           placeholder="عنوان أو وصف تعريفي مخصص لسهولة الحفظ..."
@@ -1854,6 +1191,7 @@ export default function App() {
                       <input
                         type="text"
                         required
+                        maxLength={100}
                         value={inputDish}
                         onChange={(e) => setInputDish(e.target.value)}
                         placeholder="مثال: مضغوط لحم، جريش، مظبي..."
@@ -1879,6 +1217,7 @@ export default function App() {
                         <label className="text-[10px] font-bold text-gray-400">أو ضع رابط صورة إنترنت مخصص:</label>
                         <input
                           type="text"
+                          maxLength={2048}
                           value={inputDishImage.startsWith('PRESET_ICON:') ? '' : inputDishImage}
                           onChange={(e) => setInputDishImage(e.target.value)}
                           placeholder="https://example.com/food.jpg"
@@ -1994,6 +1333,7 @@ export default function App() {
                       <input
                         type="text"
                         required
+                        maxLength={100}
                         value={inputPhotoTitle}
                         onChange={(e) => setInputPhotoTitle(e.target.value)}
                         placeholder="مثال: لقطة الغروب، خلفية التحدي، فوز المغامرة..."
@@ -2019,6 +1359,7 @@ export default function App() {
                         <label className="text-[10px] font-bold text-gray-400">أو ضع رابط صورة إنترنت للقطة:</label>
                         <input
                           type="text"
+                          maxLength={2048}
                           value={inputPhotoUrl.startsWith('PRESET_ICON:') ? '' : inputPhotoUrl}
                           onChange={(e) => setInputPhotoUrl(e.target.value)}
                           placeholder="https://example.com/banner.png"
@@ -2092,10 +1433,10 @@ export default function App() {
                   <div className="bg-gradient-to-r from-orange-950/25 via-neutral-900/60 to-orange-950/25 border border-orange-900/30 p-4.5 rounded-xl">
                     <h3 className="text-sm font-black text-white flex items-center gap-1.5">
                       <HelpCircle className="w-4.5 h-4.5 text-orange-400" />
-                      <span>مركز مساندة المغامرين والاتصال بالمدير عاصم 💬</span>
+                      <span>ملاحظاتك المحلية 💬</span>
                     </h3>
                     <p className="text-[11px] text-gray-400 mt-1 leading-normal">
-                      هل واجهتك مشكلة في تفعيل الأبدية اللانهائية أو نقل الـ 1,000﷼؟ راسل المدير بشكل فوري وسيتلقى طلبك في لوحة تحكمه الخاصة للرد والتقصي.
+                      احفظ ملاحظة أو وصفاً لمشكلة تقنية داخل هذا المتصفح. لا تُرسل هذه البيانات إلى أي جهة خارجية.
                     </p>
                   </div>
 
@@ -2107,9 +1448,10 @@ export default function App() {
                       <input
                         type="text"
                         required
+                        maxLength={120}
                         value={supportSubject}
                         onChange={(e) => setSupportSubject(e.target.value)}
-                        placeholder="مثال: استفسار عن التحويل البنكي، طلب تفعيل يدوي..."
+                        placeholder="مثال: مشكلة في حفظ رابط..."
                         className="w-full bg-[#161619] border border-neutral-850 rounded-lg py-2 px-3 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-orange-500/40 font-medium"
                       />
                     </div>
@@ -2119,6 +1461,7 @@ export default function App() {
                       <textarea
                         required
                         rows={3}
+                        maxLength={2000}
                         value={supportBody}
                         onChange={(e) => setSupportBody(e.target.value)}
                         placeholder="اكتب تفاصيل استفسارك كاملاً هنا..."
@@ -2130,7 +1473,7 @@ export default function App() {
                       type="submit"
                       className="w-full py-2 bg-orange-700 hover:bg-orange-600 border border-orange-500/30 text-white text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
                     >
-                      <span>💬 إرسال تذكرة الدعم للمدير</span>
+                      <span>💬 حفظ الملاحظة محلياً</span>
                     </button>
                   </form>
 
@@ -2154,7 +1497,7 @@ export default function App() {
                             {t.replyText ? (
                               <div className="p-2.5 bg-emerald-950/20 border border-emerald-900/40 rounded-lg space-y-1 text-right leading-normal">
                                 <span className="text-[10px] font-bold text-emerald-400 block flex items-center gap-1">
-                                  💬 رد الدعم الفني من المدير عاصم سيف:
+                                  💬 رد محفوظ سابقاً:
                                 </span>
                                 <p className="text-xs text-emerald-200 font-medium">{t.replyText}</p>
                               </div>
@@ -2578,258 +1921,6 @@ export default function App() {
 
                 </div>
               )}
-              {activeTab === 'admin' && currentUser.role === 'admin' && (
-                <div className="bg-[#0e0e10] border border-emerald-950 p-6 rounded-2xl shadow-xl space-y-6 text-right">
-                  
-                  {/* Title Bar */}
-                  <div className="flex items-center justify-between pb-3 border-b border-neutral-900 flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 bg-emerald-950/50 text-emerald-400 rounded-md">
-                        <Users className="w-4 h-4" />
-                      </div>
-                      <h4 className="text-sm font-black text-emerald-400">لوحة تحكم المدير العام الخصوصية (المدير عاصم) 👑 🛡️</h4>
-                    </div>
-                    <span className="text-xs bg-emerald-950/60 text-emerald-300 border border-emerald-900/40 px-3 py-1 rounded-full font-mono font-bold">
-                      مجموعة الحسابات: {totalRegisteredUsersCount}
-                    </span>
-                  </div>
-
-                  <p className="text-[11px] text-gray-400 leading-relaxed font-sans">
-                    بصفتك المسجل الأول (المدير العام المالي والأمني المطلق لغرفة بوابة المغامرة)، تتيح لك لوحة التحكم مراقبة جميع الحسابات، مراجعة إثباتات الدفع وصور البطاقات المحملة، التحكم بمؤقت الأبدية ذو الدقيقة الواحدة، وإتلاف أو حذف أي حساب لإزالته كلياً من المتصفح. كما يمكنك الرد على استفسارات وتذاكر الدعم الواردة فوراً!
-                  </p>
-
-                  {/* 1. SECTION: BANK TRANSFERS REVIEWS (طلبات التحويل البنكي بانتظار التدقيق والاعتماد) */}
-                  <div className="space-y-3 bg-[#0d1512]/30 border border-emerald-900/20 p-4 rounded-xl">
-                    <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
-                      <CreditCard className="w-4 h-4 text-amber-400" />
-                      <span>📥 طلبات التحويل البنكي وصور البطاقات المعلقة بالانتظار:</span>
-                    </span>
-
-                    {users.filter(u => u.paymentPendingVerification).length === 0 ? (
-                      <p className="text-[10.5px] text-gray-500 font-sans">لا توجد طلبات تفعيل معلقة أو متحقق منها بانتظار المراجعة حالياً.</p>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {users.filter(u => u.paymentPendingVerification).map((pendingUser) => (
-                          <div key={pendingUser.id} className="bg-neutral-950 border border-amber-500/30 p-4 rounded-xl space-y-3.5 relative">
-                            <div className="flex justify-between items-start gap-1">
-                              <div>
-                                <h5 className="text-xs font-bold text-gray-200">{pendingUser.username}</h5>
-                                <span className="text-[10px] text-gray-500 font-mono block">{pendingUser.email}</span>
-                              </div>
-                              <span className="text-[9px] bg-amber-950/60 border border-amber-500/30 text-amber-400 font-bold px-2 py-0.5 rounded animate-pulse">
-                                ⏳ قيد المراجعة
-                              </span>
-                            </div>
-
-                            {/* SMS Code representation */}
-                            <div className="bg-[#121214] border border-neutral-900 p-2 rounded text-[11px] space-y-1">
-                              <span className="text-gray-500 block">📲 رمز تأكيد سحب OTP البنك المدخل:</span>
-                              <span className="text-rose-400 font-mono font-bold tracking-widest block text-xs">
-                                {pendingUser.bankTransferOTP || 'لا يوجد'}
-                              </span>
-                            </div>
-
-                            {/* Uploaded Card image */}
-                            <div className="space-y-1.5">
-                              <span className="text-[10px] text-gray-500 block">🖼️ إيصال سحب وصورة البطاقة المرفقة:</span>
-                              <div className="border border-neutral-900 rounded-lg p-1.5 bg-neutral-900/60 text-center max-h-36 overflow-hidden flex items-center justify-center">
-                                {pendingUser.bankTransferReceipt ? (
-                                  pendingUser.bankTransferReceipt.startsWith('PRESET_ICON:') ? (
-                                    <span className="text-4xl py-4">{pendingUser.bankTransferReceipt.split(':')[1]}</span>
-                                  ) : (
-                                    <img 
-                                      src={pendingUser.bankTransferReceipt} 
-                                      alt="Uploaded Card Receipt" 
-                                      className="max-h-32 rounded object-contain mx-auto"
-                                    />
-                                  )
-                                ) : (
-                                  <span className="text-[10px] text-gray-650 italic">لم يتم إرفاق صورة</span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Interactive decision buttons */}
-                            <div className="pt-2 border-t border-neutral-900/70 space-y-1.5">
-                              <span className="text-[10px] text-gray-500 block pb-1">اتخذ قرار الاعتماد للحساب:</span>
-                              <div className="grid grid-cols-2 gap-2">
-                                <button
-                                  onClick={() => handleAdminApprovePayment(pendingUser.id, true)}
-                                  className="py-1.5 px-2.5 bg-emerald-650 hover:bg-emerald-550 text-white font-bold text-[10px] rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
-                                >
-                                  <span>👑 تفعيل لانهائي للأبد</span>
-                                </button>
-                                <button
-                                  onClick={() => handleAdminApprovePayment(pendingUser.id, false)}
-                                  className="py-1.5 px-2.5 bg-amber-650 hover:bg-amber-550 text-white font-bold text-[10px] rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
-                                >
-                                  <span>⏳ تفعيل دقيقة واحدة</span>
-                                </button>
-                              </div>
-                              <button
-                                onClick={() => handleAdminRejectPayment(pendingUser.id)}
-                                className="w-full py-1.5 bg-red-950/60 hover:bg-red-900/40 border border-red-900/30 text-red-400 text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
-                              >
-                                <span>❌ رفض التحويل وإلغاء الطلب</span>
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 2. SECTION: SUPPORT TICKETS & REPLIES (إدارة واستقبال تذاكر دعم المشتركين) */}
-                  <div className="space-y-3 bg-[#0d1215]/30 border border-neutral-900 p-4 rounded-xl">
-                    <span className="text-xs font-bold text-orange-400 flex items-center gap-1.5">
-                      <HelpCircle className="w-4 h-4 text-orange-450" />
-                      <span>💬 تذاكر الدعم والمساندة الواردة من الأعضاء:</span>
-                    </span>
-
-                    {supportTickets.length === 0 ? (
-                      <p className="text-[10.5px] text-gray-500 font-sans">لا توجد أي تذاكر واردة من المستخدمين الآخرين حتى الآن.</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {supportTickets.map((ticket) => (
-                          <div key={ticket.id} className="bg-neutral-950 border border-neutral-850 p-3.5 rounded-xl space-y-3">
-                            <div className="flex justify-between items-start gap-2 flex-wrap text-right">
-                              <div>
-                                <h5 className="text-xs font-black text-white">{ticket.subject}</h5>
-                                <span className="text-[10px] text-gray-500 font-sans">
-                                  بواسطة: {ticket.username} ({ticket.email})
-                                </span>
-                              </div>
-                              <span className="text-[9px] font-mono text-gray-600 bg-[#121214] px-1.5 py-0.5 rounded">
-                                {ticket.createdAt}
-                              </span>
-                            </div>
-
-                            <p className="text-[11px] text-gray-300 leading-relaxed bg-[#121214] p-2.5 rounded border border-neutral-900">
-                              {ticket.message}
-                            </p>
-
-                            {/* Reply Input or Show Answer */}
-                            {ticket.replyText ? (
-                              <div className="p-2.5 bg-emerald-950/20 border border-emerald-900/30 rounded-lg text-right">
-                                <span className="text-[10px] font-bold text-emerald-400 block pb-1">💬 ردك المدون المكتمل:</span>
-                                <p className="text-xs text-emerald-250 font-sans">{ticket.replyText}</p>
-                              </div>
-                            ) : (
-                              <div className="space-y-2 pt-1 border-t border-neutral-900/50">
-                                <span className="text-[10px] text-amber-500 font-bold block">⌛ التذكرة بانتظار ردك:</span>
-                                <div className="flex gap-2">
-                                  <textarea
-                                    rows={2}
-                                    value={supportReplyText[ticket.id] || ''}
-                                    onChange={(e) => setSupportReplyText(prev => ({ ...prev, [ticket.id]: e.target.value }))}
-                                    placeholder="اكتب رد الدعم والمساندة الفورية للعضو..."
-                                    className="flex-1 bg-[#121214] border border-neutral-850 rounded-lg p-2 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-orange-500/40"
-                                  ></textarea>
-                                  <button
-                                    onClick={() => handleAdminReplyTicket(ticket.id)}
-                                    className="px-4 bg-orange-700 hover:bg-orange-600 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer self-stretch flex items-center justify-center"
-                                  >
-                                    إرسال الرد
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 3. SECTION: GENERAL ACCOUNTS LIST (إدارة وإتلاف الحسابات العادية) */}
-                  <div className="space-y-3 bg-[#110101]/20 border border-neutral-900 p-4 rounded-xl">
-                    <span className="text-xs font-bold text-gray-300 block">👥 إدارة الحسابات والتحكم بالصلاحيات والمؤقتات:</span>
-
-                    {users.filter(u => u.id !== currentUser.id).length === 0 ? (
-                      <div className="bg-[#121214] border border-neutral-850 p-6 rounded-xl text-center text-xs text-gray-600">
-                        لا يوجد حسابات لمستخدمين آخرين مسجلة حتى الآن بالبوابة.
-                      </div>
-                    ) : (
-                      <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
-                        {users.filter(u => u.id !== currentUser.id).map((user) => (
-                          <div 
-                            key={user.id}
-                            className="bg-[#121214] border border-neutral-850 p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 transition-all hover:border-emerald-950/50 text-right"
-                          >
-                            <div className="space-y-1.5 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className={`w-2 h-2 rounded-full ${user.isInfinite ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                                <h4 className="text-xs font-black text-gray-200 truncate">{user.username}</h4>
-                                <span className="text-[10px] text-gray-500 font-mono">({user.email})</span>
-                              </div>
-
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-[9px] px-2 py-0.5 rounded border ${
-                                  user.isInfinite 
-                                    ? 'bg-emerald-950/60 border-emerald-900/40 text-emerald-300' 
-                                    : 'bg-neutral-900 border-neutral-800 text-gray-400'
-                                }`}>
-                                  النوع: {user.isInfinite ? '👑 أبدي المدى' : '⌛ مؤقت دقيقة'}
-                                </span>
-                                
-                                {user.expired ? (
-                                  <span className="text-[9px] bg-red-950/60 border border-red-900/40 text-red-400 font-black px-2 py-0.5 rounded flex items-center gap-1 animate-pulse">
-                                    <AlertTriangle className="w-3 h-3" />
-                                    <span>انتهت أبدية الدقيقة! الحظر نشط 🔒</span>
-                                  </span>
-                                ) : (
-                                  <span className="text-[9px] bg-emerald-950/50 border border-emerald-900/30 text-emerald-400 font-bold px-2 py-0.5 rounded">
-                                    نشط ومفتوح ضمن مهلة الأبدية ⏳
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Actions block exclusively for the Manager to control accounts */}
-                            <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
-                              
-                              {/* 1. Recentre countdown timer to allow another 1 minute */}
-                              {user.expired && (
-                                <button
-                                  onClick={() => handleAdminResetExpiry(user)}
-                                  className="px-2.5 py-1.5 bg-emerald-950/40 hover:bg-emerald-900 text-emerald-400 border border-emerald-900/40 text-[10.5px] font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                                  title="إعادة تفعيل دقيقة لانهائية جديدة"
-                                >
-                                  <RotateCcw className="w-3.5 h-3.5" />
-                                  <span>تصفير المؤشر</span>
-                                </button>
-                              )}
-
-                              {/* 2. Absolute deletion button */}
-                              <button
-                                  onClick={() => handleAdminDeleteUser(user.id)}
-                                  className="px-2.5 py-1.5 bg-red-950/50 hover:bg-red-900/40 text-red-400 border border-red-900/40 text-[10.5px] font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                                  title="إتلاف وتدمير ملف الحساب النهائي"
-                              >
-                                <UserX className="w-3.5 h-3.5" />
-                                <span>حذف الحساب</span>
-                              </button>
-                            </div>
-
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {users.filter(u => u.id !== currentUser.id).length > 0 && (
-                      <div className="pt-3 border-t border-neutral-900/40 flex justify-end">
-                        <button
-                          onClick={handleAdminWipeAllUsers}
-                          className="px-3.5 py-2 bg-red-950/30 hover:bg-red-900/20 text-red-400 border border-red-900/40 text-[10.5px] font-bold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                          <span>إتلاف وتصفير جميع الحسابات العادية دفعة واحدة 💀</span>
-                        </button>
-                      </div>
-                    )}
-
-                  </div>
-                </div>
-              )}
 
             </div>
           )}
@@ -2838,10 +1929,10 @@ export default function App() {
           <div className="relative z-10 p-4 bg-[#0e0e10]/80 border border-neutral-900 rounded-xl space-y-1">
             <h5 className="text-[11px] font-black text-gray-300 flex items-center gap-1.5">
               <Info className="w-3.5 h-3.5 text-red-400" />
-              كيف يعمل الترخيص المجهول للأبدية؟
+              كيف تعمل الخصوصية المحلية؟
             </h5>
             <p className="text-[10px] text-gray-500 leading-relaxed">
-              تعتمد شريحة المغامرة اللانهائية على رخص المتصفح المدمج. بمجرد تسجيلك، يمكنك معالجة ومشاركة Links (رابط)، الوجبات المفضلة، ومعرض الصور التفاعلية بخصوصية وحصر دائم. الحساب الأول هو بمثابة المدير المالي ويشرف كلياً على تسيير رخص الولوج.
+              تُحفظ الملفات والروابط والصور داخل تخزين المتصفح على جهازك. لا ترسل الصفحة كلمات مرور البريد أو بيانات البطاقات أو رموز التحقق، ولا توجد صلاحيات مدير مخفية.
             </p>
           </div>
 
@@ -2854,72 +1945,14 @@ export default function App() {
         <div className="max-w-xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-2">
           <p>© {new Date().getFullYear()} بوابة شفرة المغامرة. كافة الحقوق محفوظة.</p>
           <div className="flex gap-2">
-            <span>مدير مجاني مدى الحياة</span>
+            <span>تخزين محلي</span>
             <span>|</span>
-            <span>الأعضاء 1000﷼ للدقيقة الأبدية</span>
+            <span>دون بيانات دفع</span>
             <span>|</span>
             <span className="text-red-500/75 animate-pulse">شغف كامل</span>
           </div>
         </div>
       </footer>
-
-      {/* ------------------------ PRANK OVERLAY MODAL: THE 1-MINUTE ETERNITY EXPIRY ALARM ------------------------ */}
-      <AnimatePresence>
-        {showExpiryModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            {/* Dark Scarlet Crimson Backdrop */}
-            <div 
-              className="absolute inset-0 bg-[#070101]/95 backdrop-blur-md cursor-pointer" 
-              onClick={() => setShowExpiryModal(false)}
-            ></div>
-
-            {/* Glowing Emergency Box */}
-            <div className="relative w-full max-w-md bg-[#110101] border-2 border-red-600 rounded-2xl p-6 sm:p-8 text-right space-y-5 shadow-[0_0_50px_rgba(239,68,68,0.4)] border-neon-red">
-              
-              <div className="text-center space-y-3">
-                <div className="mx-auto w-12 h-12 bg-red-950/60 border border-red-500 rounded-full flex items-center justify-center text-red-400 animate-ping">
-                  <AlertTriangle className="w-6 h-6 stroke-[2.5]" />
-                </div>
-                
-                <h2 className="text-2xl font-black text-white tracking-widest uppercase neon-glow-red">
-                  ⚠️ نَفِذَتِ الَأَبَدِيَّةُ!
-                </h2>
-                
-                {expiredUserRef && (
-                  <p className="text-xs bg-red-950/40 text-red-400 border border-red-900/30 px-3 py-1 rounded inline-block font-mono">
-                    المستكشف: {expiredUserRef.username} | دفع رسوم: 1,000﷼
-                  </p>
-                )}
-              </div>
-
-              <div className="text-xs text-gray-300 leading-relaxed text-center space-y-3">
-                <p>
-                  لقد انتهت مهلة صلاحية اشتراكك اللانهائي (بقيمة <span className="text-rose-500 font-black">1,000﷼</span>) الخاص بك بعد مرور <span className="text-rose-400 font-bold">دقيقة واحدة</span> كاملة!
-                </p>
-                
-                <div className="p-3 bg-red-950/20 border border-red-900/30 rounded-lg italic text-[11px] text-gray-400 text-right leading-relaxed font-serif">
-                  "قال الحكيم القديم في قلعة المغامرات: الأبدية الحقيقية تكمن في متعة اللحظة العابرة والسرور الآن، والدقيقة الواحدة هي بمثابة أبدية وخلود لا نهائي في نظام السرعة الرقمية! دقيقتنا دهر كامل 😈."
-                </div>
-
-                <p className="text-gray-400 text-[11px]">
-                  للولوج مجدداً أو نيل الإعفاء المالي، يرجى الاسترحام والتودد لـ <span className="text-emerald-400 font-bold">المدير العام 👑</span> (صاحب أول حساب تم تفعيله بالنظام). يتمتع المدير بالصلاحية الحصرية المطلقة لإعادة تصفير المؤشر أو حذف حسابك لكي يتسنى لك التسجيل والمحاولة من جديد بـ <span className="text-rose-500 font-black">1,000﷼</span> إضافية!
-                </p>
-              </div>
-
-              <div className="pt-2 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowExpiryModal(false)}
-                  className="flex-1 py-3 bg-red-650 hover:bg-red-550 border border-red-500/40 text-white font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer text-center"
-                >
-                  فهمت وقبلت بقدري 🙇‍♂️
-                </button>
-              </div>
-
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
 
     </div>
   );
